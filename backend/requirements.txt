@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+pydantic==2.10.3
+pydantic-settings==2.6.1
+itsdangerous==2.2.0
+python-multipart==0.0.17
+
+# 云端建议 PostgreSQL；本地可仅用 SQLite。设置 DATABASE_URL=postgresql+psycopg://...
+psycopg[binary]==3.2.3
