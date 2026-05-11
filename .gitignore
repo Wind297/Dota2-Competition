@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
+scripts/deploy-aliyun.env
 *.db
 backend/static/
 frontend/node_modules/

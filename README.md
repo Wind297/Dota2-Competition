@@ -106,3 +106,100 @@ CSV 列：`name`, `score`（重名覆盖当前积分）。
 ### Railway（简述）
 
 新建 Project → Deploy from GitHub → 选仓库 → 变量同样设置 `ADMIN_PASSWORD`、`SECRET_KEY`、`DATABASE_URL` → Railway 识别 `Dockerfile` 构建即可。具体菜单名可能微调，逻辑与 Render 相同。
+
+---
+
+## 阿里云部署（国内访问更顺畅）
+
+适合：**管理员在大陆**，希望打开后台快、少遇到国际链路问题。代价是 **轻量服务器通常按年/按月少量付费**（常有新用户试用或特价），需要你会 **SSH 登录 + 复制几条命令**（仍比从零配 Linux 网站简单得多）。
+
+### 1. 买什么
+
+- 打开 [阿里云轻量应用服务器](https://www.aliyun.com/product/swas)（或搜「轻量应用服务器」）。  
+- 选 **内地地域**（离你最近）。  
+- 镜像建议：**Ubuntu 22.04**（或带 **Docker** 的应用镜像，可跳过下面安装 Docker）。  
+- 套餐：**最低档**一般足够一名管理员使用。
+
+### 2. 放行端口
+
+在轻量控制台 → 你的实例 → **防火墙 / 安全组**：放行 **TCP `8000`**（先快速用起来）。  
+以后若要 **80 / 443 + 域名**，再考虑配 Nginx 与 HTTPS（可选）。
+
+### 3. 登录服务器并安装 Docker（Ubuntu 示例）
+
+SSH 登录后执行（若镜像已预装 Docker 可跳过安装步骤）：
+
+```bash
+sudo apt update && sudo apt install -y docker.io git
+sudo systemctl enable --now docker
+```
+
+把代码放到机器上（二选一）：
+
+- **Git**：`git clone <你的仓库地址>`，再 `cd Dota2-Competition`  
+- **本地上传**：用 SFTP 工具把项目文件夹传到服务器
+
+### 4. 构建并运行（本仓库根目录有 Dockerfile）
+
+**推荐：一键脚本**（密码写在单独文件里，避免在终端历史里留下明文）
+
+在 **`Dota2-Competition` 仓库根目录**执行：
+
+```bash
+cp scripts/deploy-aliyun.example.env scripts/deploy-aliyun.env
+nano scripts/deploy-aliyun.env
+```
+
+改好 `ADMIN_PASSWORD`、`SECRET_KEY` 后保存，再执行：
+
+```bash
+chmod +x scripts/deploy-aliyun.sh
+bash scripts/deploy-aliyun.sh
+```
+
+可选环境变量（脚本默认值已够用）：
+
+- **`HOST_PORT`**：宿主机映射端口，默认 `8000`（与轻量防火墙放行一致）。  
+  例：`HOST_PORT=8080 bash scripts/deploy-aliyun.sh`  
+- **`DATA_HOST_PATH`**：数据库目录在宿主机路径，默认 `/root/dota2-data`。
+
+**手写 `docker run`（与脚本等价）**：
+
+```bash
+sudo docker build -t dota2-competition .
+sudo mkdir -p /root/dota2-data
+sudo docker run -d --restart unless-stopped --name dota2-competition \
+  -p 8000:8000 \
+  -e PORT=8000 \
+  -e ADMIN_PASSWORD='在这里改成强密码' \
+  -e SECRET_KEY='在这里改成一长串随机字符' \
+  -e DATABASE_URL='sqlite:////data/competition.db' \
+  -e TIMEZONE=Asia/Shanghai \
+  -v /root/dota2-data:/data \
+  dota2-competition
+```
+
+说明：
+
+- **`DATABASE_URL`** 使用主机目录 **`/root/dota2-data`** 映射到容器内 `/data`，数据库文件会持久保存；重装容器只要不删宿主机目录，数据仍在。  
+- 若改用 **阿里云 RDS PostgreSQL**，把 `DATABASE_URL` 换成 `postgresql+psycopg://...` 即可（需与安全组/白名单放行匹配）。
+
+### 5. 访问
+
+浏览器打开：`http://服务器公网IP:8000/`  
+（登录页 → 使用你在 `ADMIN_PASSWORD` 里设的密码。）
+
+### 6. 域名与备案（可选）
+
+- **只用 IP + 端口**：一般 **不要求备案**，适合内部自用。  
+- **要备案域名、默认 80 端口对外网站**：按阿里云要求完成 **ICP 备案**，再配 **Nginx 反向代理 + HTTPS**（可参考阿里云文档或以后再迭代）。
+
+### 和 Render 对比（帮你下决心）
+
+| | 阿里云轻量 | Render 免费档 |
+|--|------------|----------------|
+| 国内访问 | 通常更快、更稳 | 可能慢或不稳定 |
+| 费用 | 多为低价包年/包月 | 常有免费额度 |
+| 运维量 | 需要 SSH + 几条命令 | 几乎全图形界面 |
+
+两者都用同一套 **`Dockerfile`**，应用本身不用改。
