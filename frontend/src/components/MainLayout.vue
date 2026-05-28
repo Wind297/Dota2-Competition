@@ -1,14 +1,26 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { NLayout, NLayoutContent, NLayoutHeader } from "naive-ui";
 import { useRouter, useRoute } from "vue-router";
-import { TOKEN_KEY, GUEST_KEY, clearAuth } from "@/api";
+import { TOKEN_KEY, GUEST_KEY, clearAuth, fetchCurrentSeason, type Season } from "@/api";
 
 const router = useRouter();
 const route = useRoute();
 
 const isAdmin = computed(() => !!localStorage.getItem(TOKEN_KEY) && localStorage.getItem(GUEST_KEY) !== "1");
 const isGuest = computed(() => localStorage.getItem(GUEST_KEY) === "1");
+
+const currentSeason = ref<Season | null>(null);
+
+async function loadCurrentSeason() {
+  try {
+    currentSeason.value = await fetchCurrentSeason();
+  } catch {
+    currentSeason.value = null;
+  }
+}
+
+onMounted(loadCurrentSeason);
 
 function logout() {
   clearAuth();
@@ -24,11 +36,13 @@ const navItems = [
   { path: "/", name: "players", label: "选手池" },
   { path: "/matches", name: "matches", label: "比赛记录" },
   { path: "/rankings", name: "rankings", label: "排行榜" },
+  { path: "/seasons", name: "seasons", label: "赛季" },
 ];
 
 function isActive(item: { path: string; name: string }): boolean {
   if (item.name === "players") return route.path === "/" || route.name === "players";
   if (item.name === "matches") return route.path.startsWith("/matches");
+  if (item.name === "seasons") return route.path === "/seasons";
   return route.path === item.path;
 }
 
@@ -50,7 +64,7 @@ function navigate(path: string) {
               <circle cx="12" cy="12" r="3" fill="#b97324"/>
             </svg>
           </div>
-          <span class="brand-text">个人积分赛</span>
+          <span class="brand-text">武汉点神杯·个人积分赛</span>
         </div>
 
         <div class="vertical-sep"></div>
@@ -70,6 +84,9 @@ function navigate(path: string) {
 
         <!-- 右侧 -->
         <div class="right-actions">
+          <span v-if="currentSeason" class="season-tag" @click="router.push('/seasons')" title="点击查看赛季列表">
+            {{ currentSeason.name }}
+          </span>
           <span v-if="isAdmin" class="role-tag role-admin">
             <span class="role-dot"></span>管理员
           </span>
@@ -196,6 +213,24 @@ function navigate(path: string) {
   border-radius: 3px;
   letter-spacing: 0.5px;
 }
+.season-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  background: rgba(44, 109, 193, 0.08);
+  color: #2c6dc1;
+  border: 1px solid rgba(44, 109, 193, 0.2);
+  transition: all 0.15s;
+}
+.season-tag:hover {
+  background: rgba(44, 109, 193, 0.14);
+  border-color: rgba(44, 109, 193, 0.4);
+}
 .role-admin {
   background: rgba(185, 115, 36, 0.12);
   color: #b97324;
@@ -239,9 +274,11 @@ function navigate(path: string) {
   color: #ffffff;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 880px) {
   .header-inner { padding: 0 14px; gap: 10px; }
   .vertical-sep { display: none; }
   .role-tag { display: none; }
+  .season-tag { display: none; }
+  .brand-text { display: none; }
 }
 </style>

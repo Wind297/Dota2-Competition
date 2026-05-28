@@ -63,6 +63,9 @@ const filteredPlayers = computed(() => {
   return players.value.filter((p) => p.name.toLowerCase().includes(kw));
 });
 
+// 是否显示已退出本赛季的选手
+const showInactive = ref(false);
+
 let debounceTimer: number | undefined;
 
 function scheduleReload() {
@@ -78,10 +81,14 @@ watch(
   { deep: true },
 );
 
+watch(showInactive, () => {
+  scheduleReload();
+});
+
 async function loadPlayers() {
   loading.value = true;
   try {
-    players.value = await fetchPlayers(filters.value);
+    players.value = await fetchPlayers(filters.value, showInactive.value);
   } catch {
     message.error("加载选手列表失败");
   } finally {
@@ -252,14 +259,17 @@ async function runBulkImport() {
 
 function confirmDeletePlayer(row: Player) {
   dialog.warning({
-    title: `删除选手「${row.name}」？`,
-    content: "若该选手已有比赛记录，将无法删除；请先到「历史比赛」删掉相关场次。此操作不可恢复。",
-    positiveText: "删除",
+    title: `把「${row.name}」移出本赛季？`,
+    content:
+      "该选手将不再出现在本赛季选手池中（已计入的比赛和积分仍保留）。\n" +
+      "若已在本赛季有比赛记录，需先删除相关场次后才能移除。\n" +
+      "下一赛季可重新加入或继承。",
+    positiveText: "移出本赛季",
     negativeText: "取消",
     onPositiveClick: async () => {
       try {
         await deletePlayer(row.id);
-        message.success("已删除");
+        message.success("已移出本赛季");
         checkedRowKeys.value = checkedRowKeys.value.filter((k) => Number(k) !== row.id);
         await loadPlayers();
         return true;
@@ -269,6 +279,16 @@ function confirmDeletePlayer(row: Player) {
       }
     },
   });
+}
+
+async function restorePlayer(row: Player) {
+  try {
+    await patchPlayer(row.id, { is_active: true });
+    message.success("已恢复为本赛季参赛");
+    await loadPlayers();
+  } catch (e) {
+    message.error((e as Error).message);
+  }
 }
 
 function onCheckedRowKeys(keys: Array<string | number>) {
@@ -300,31 +320,38 @@ const columns: DataTableColumns<Player> = [
         {
           title: "操作",
           key: "ops",
-          width: 210,
+          width: 240,
           render(row: Player) {
-            return h(
-              NSpace,
-              { size: "small" },
-              {
-                default: () => [
-                  h(
-                    NButton,
-                    { size: "small", tertiary: true, onClick: () => openRenameModal(row) },
-                    { default: () => "改名" },
-                  ),
-                  h(
-                    NButton,
-                    { size: "small", tertiary: true, onClick: () => openScoreModal(row) },
-                    { default: () => "积分" },
-                  ),
-                  h(
-                    NButton,
-                    { size: "small", type: "error", tertiary: true, onClick: () => confirmDeletePlayer(row) },
-                    { default: () => "删除" },
-                  ),
-                ],
-              },
-            );
+            const items = [
+              h(
+                NButton,
+                { size: "small", tertiary: true, onClick: () => openRenameModal(row) },
+                { default: () => "改名" },
+              ),
+              h(
+                NButton,
+                { size: "small", tertiary: true, onClick: () => openScoreModal(row) },
+                { default: () => "积分" },
+              ),
+            ];
+            if (row.is_active) {
+              items.push(
+                h(
+                  NButton,
+                  { size: "small", type: "error", tertiary: true, onClick: () => confirmDeletePlayer(row) },
+                  { default: () => "移出" },
+                ),
+              );
+            } else {
+              items.push(
+                h(
+                  NButton,
+                  { size: "small", type: "primary", tertiary: true, onClick: () => restorePlayer(row) },
+                  { default: () => "恢复参赛" },
+                ),
+              );
+            }
+            return h(NSpace, { size: "small" }, { default: () => items });
           },
         },
       ]
@@ -376,8 +403,11 @@ const columns: DataTableColumns<Player> = [
 ];
 
 function rowProps(row: Player) {
+  if (!row.is_active) {
+    return { style: { opacity: 0.5, fontStyle: "italic" } };
+  }
   return {
-    style: row.is_online ? undefined : { opacity: 0.55 },
+    style: row.is_online ? undefined : { opacity: 0.6 },
   };
 }
 
@@ -492,6 +522,9 @@ async function onCreateMatch() {
             size="small"
             style="max-width: 280px"
           />
+          <n-checkbox v-if="adminMode" v-model:checked="showInactive" style="margin-left: 12px">
+            <span style="font-size: 12px">显示已退出本赛季</span>
+          </n-checkbox>
         </div>
         <n-data-table
           :loading="loading"
@@ -669,6 +702,10 @@ async function onCreateMatch() {
 
 /* 搜索栏 */
 .search-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-bottom: 12px;
   padding-bottom: 12px;
   border-bottom: 1px solid #eef1f5;

@@ -1,27 +1,80 @@
 <script setup lang="ts">
-import { h, onMounted, ref } from "vue";
-import { NButton, NCard, NDataTable, useMessage, type DataTableColumns } from "naive-ui";
-import type { RankingRow } from "@/api";
-import { fetchRankings } from "@/api";
+import { computed, h, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { NButton, NCard, NDataTable, NSelect, useMessage, type DataTableColumns } from "naive-ui";
+import type { RankingRow, Season } from "@/api";
+import { fetchRankings, fetchSeasons } from "@/api";
 import MainLayout from "@/components/MainLayout.vue";
 import PageHeader from "@/components/PageHeader.vue";
 
+const route = useRoute();
+const router = useRouter();
 const message = useMessage();
 const rows = ref<RankingRow[]>([]);
 const loading = ref(false);
+const seasons = ref<Season[]>([]);
+// null = 当前赛季
+const selectedSeasonId = ref<number | null>(null);
+
+const seasonOptions = computed(() => {
+  const opts: { label: string; value: number | null }[] = [
+    { label: "当前赛季", value: null },
+  ];
+  for (const s of seasons.value) {
+    opts.push({
+      label: `${s.name}${s.is_current ? "（进行中）" : "（已封存）"}`,
+      value: s.id,
+    });
+  }
+  return opts;
+});
+
+const currentSeasonName = computed(() => {
+  if (selectedSeasonId.value == null) {
+    const cur = seasons.value.find((s) => s.is_current);
+    return cur?.name ?? "当前赛季";
+  }
+  return seasons.value.find((s) => s.id === selectedSeasonId.value)?.name ?? "";
+});
 
 async function load() {
   loading.value = true;
   try {
-    rows.value = await fetchRankings();
-  } catch {
-    message.error("加载排行榜失败");
+    rows.value = await fetchRankings(selectedSeasonId.value ?? undefined);
+  } catch (e) {
+    message.error((e as Error).message);
   } finally {
     loading.value = false;
   }
 }
 
-onMounted(load);
+async function loadSeasons() {
+  try {
+    seasons.value = await fetchSeasons();
+  } catch {
+    // 忽略
+  }
+}
+
+onMounted(async () => {
+  await loadSeasons();
+  // 从 URL ?season_id=N 读取初始值
+  const fromQuery = route.query.season_id;
+  if (typeof fromQuery === "string") {
+    const id = Number(fromQuery);
+    if (!Number.isNaN(id)) selectedSeasonId.value = id;
+  }
+  await load();
+});
+
+watch(selectedSeasonId, (v) => {
+  // 同步到 URL，便于分享
+  router.replace({
+    path: "/rankings",
+    query: v == null ? {} : { season_id: String(v) },
+  });
+  load();
+});
 
 function rankColor(rank: number): string {
   if (rank === 1) return "#c9962a";
@@ -102,12 +155,19 @@ const columns: DataTableColumns<RankingRow> = [
 
 <template>
   <main-layout>
-    <page-header title="排行榜" subtitle="Rankings" />
+    <page-header title="排行榜" :subtitle="currentSeasonName" />
 
     <n-card>
-      <template #header-extra>
+      <div class="filter-bar">
+        <span class="filter-label">赛季</span>
+        <n-select
+          v-model:value="selectedSeasonId"
+          :options="seasonOptions"
+          style="width: 220px"
+          size="small"
+        />
         <n-button size="small" tertiary @click="load">刷新</n-button>
-      </template>
+      </div>
       <n-data-table
         :loading="loading"
         :columns="columns"
@@ -117,3 +177,20 @@ const columns: DataTableColumns<RankingRow> = [
     </n-card>
   </main-layout>
 </template>
+
+<style scoped>
+.filter-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #eef1f5;
+}
+.filter-label {
+  color: #5a6473;
+  font-size: 12px;
+  font-weight: 500;
+}
+</style>

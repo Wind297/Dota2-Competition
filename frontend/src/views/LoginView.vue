@@ -61,8 +61,8 @@ async function onGuestEnter() {
           </svg>
         </div>
         <div class="title-block">
-          <h1 class="login-title">个人积分赛</h1>
-          <p class="login-subtitle">PERSONAL LEAGUE</p>
+          <h1 class="login-title">武汉点神杯·个人积分赛</h1>
+          <p class="login-subtitle">DOTA 2 · WUHAN DIANSHEN CUP</p>
         </div>
       </div>
 

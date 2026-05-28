@@ -6,10 +6,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
-from app.models import Match, MatchPlayer, Player, SystemKV  # noqa: F401
-from app.routers import auth, matches, players, presets, rankings
+from app.models import (  # noqa: F401
+    Match, MatchPlayer, Player, Season, SeasonPlayer, SystemKV,
+)
+from app.routers import auth, matches, players, presets, rankings, seasons
 
-app = FastAPI(title="Dota2 个人积分赛管理 API")
+app = FastAPI(title="Dota2 武汉点神杯 · 个人积分赛 API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,65 +26,105 @@ app.include_router(players.router)
 app.include_router(matches.router)
 app.include_router(rankings.router)
 app.include_router(presets.router)
+app.include_router(seasons.router)
+
+
+def _has_column(conn, table: str, col: str) -> bool:
+    try:
+        rows = conn.exec_driver_sql(f"PRAGMA table_info({table})").fetchall()
+        return col in {r[1] for r in rows}
+    except Exception:
+        return True  # 非 SQLite，让后续 ALTER 自己处理
+
+
+def _safe_alter(conn, sql: str) -> None:
+    """容错执行 ALTER 语句（列已存在等情况忽略）。"""
+    from sqlalchemy import text
+    try:
+        conn.exec_driver_sql(sql)
+    except Exception:
+        try:
+            conn.execute(text(sql))
+        except Exception:
+            pass
 
 
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
-    # 轻量迁移：为已存在的表补上新增列
-    from sqlalchemy import text
-    with engine.begin() as conn:
-        # matches.sequence_no
-        try:
-            cols = conn.exec_driver_sql("PRAGMA table_info(matches)").fetchall()
-            col_names = {c[1] for c in cols}
-            if "sequence_no" not in col_names:
-                conn.exec_driver_sql("ALTER TABLE matches ADD COLUMN sequence_no INTEGER")
-        except Exception:
-            try:
-                conn.execute(text("ALTER TABLE matches ADD COLUMN sequence_no INTEGER"))
-            except Exception:
-                pass
 
-        # match_players.is_deducted, score_delta
-        try:
-            cols = conn.exec_driver_sql("PRAGMA table_info(match_players)").fetchall()
-            col_names = {c[1] for c in cols}
-            need_backfill = False
-            if "is_deducted" not in col_names:
-                conn.exec_driver_sql(
-                    "ALTER TABLE match_players ADD COLUMN is_deducted BOOLEAN NOT NULL DEFAULT 0"
-                )
-                need_backfill = True
-            if "score_delta" not in col_names:
-                conn.exec_driver_sql(
-                    "ALTER TABLE match_players ADD COLUMN score_delta INTEGER NOT NULL DEFAULT 0"
-                )
-                need_backfill = True
-            if need_backfill:
-                # 历史数据：把胜者的 score_delta 标为 +1（当时一律是 +1 的逻辑）
+    with engine.begin() as conn:
+        # ── 列迁移（兼容旧库）─────────────────────────────────
+        if not _has_column(conn, "matches", "sequence_no"):
+            _safe_alter(conn, "ALTER TABLE matches ADD COLUMN sequence_no INTEGER")
+        if not _has_column(conn, "matches", "season_id"):
+            _safe_alter(conn, "ALTER TABLE matches ADD COLUMN season_id INTEGER")
+
+        if not _has_column(conn, "match_players", "is_deducted"):
+            _safe_alter(conn, "ALTER TABLE match_players ADD COLUMN is_deducted BOOLEAN NOT NULL DEFAULT 0")
+        if not _has_column(conn, "match_players", "score_delta"):
+            _safe_alter(conn, "ALTER TABLE match_players ADD COLUMN score_delta INTEGER NOT NULL DEFAULT 0")
+            # 旧数据胜者补 +1
+            try:
                 conn.exec_driver_sql(
                     "UPDATE match_players SET score_delta = 1 WHERE is_winner = 1 AND score_delta = 0"
                 )
+            except Exception:
+                pass
+
+        # ── 赛季初始化 ────────────────────────────────────────
+        # 检查是否已有任何赛季；若无，则创建「第 1 赛季」并把现有数据划归该赛季
+        try:
+            season_count = conn.exec_driver_sql("SELECT COUNT(*) FROM seasons").fetchone()[0]
         except Exception:
+            season_count = 0
+
+        if season_count == 0:
+            # 数据是否真的存在
             try:
-                conn.execute(text(
-                    "ALTER TABLE match_players ADD COLUMN is_deducted BOOLEAN NOT NULL DEFAULT FALSE"
-                ))
+                player_total = conn.exec_driver_sql("SELECT COUNT(*) FROM players").fetchone()[0]
             except Exception:
-                pass
+                player_total = 0
+
+            # 创建第 1 赛季
+            from datetime import datetime, timezone
+            now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
             try:
-                conn.execute(text(
-                    "ALTER TABLE match_players ADD COLUMN score_delta INTEGER NOT NULL DEFAULT 0"
-                ))
+                conn.exec_driver_sql(
+                    "INSERT INTO seasons (name, status, started_at) VALUES (?, ?, ?)",
+                    ("第 1 赛季", "active", now_iso),
+                )
             except Exception:
-                pass
-            try:
-                conn.execute(text(
-                    "UPDATE match_players SET score_delta = 1 WHERE is_winner = TRUE AND score_delta = 0"
-                ))
-            except Exception:
-                pass
+                # 部分数据库不支持 ? 占位时退化
+                from sqlalchemy import text
+                conn.execute(
+                    text("INSERT INTO seasons (name, status, started_at) VALUES (:n, :s, :t)"),
+                    {"n": "第 1 赛季", "s": "active", "t": now_iso},
+                )
+
+            new_season_id = conn.exec_driver_sql(
+                "SELECT id FROM seasons WHERE name = ?", ("第 1 赛季",)
+            ).fetchone()
+            new_season_id = new_season_id[0] if new_season_id else None
+
+            if new_season_id is not None and player_total > 0:
+                # 把现有 players 数据迁移到 SeasonPlayer
+                try:
+                    conn.exec_driver_sql(
+                        "INSERT INTO season_players (season_id, player_id, current_score, is_online, is_active) "
+                        "SELECT ?, id, COALESCE(current_score, 0), COALESCE(is_online, 1), 1 FROM players",
+                        (new_season_id,),
+                    )
+                except Exception:
+                    pass
+                # 历史比赛归到第 1 赛季
+                try:
+                    conn.exec_driver_sql(
+                        "UPDATE matches SET season_id = ? WHERE season_id IS NULL",
+                        (new_season_id,),
+                    )
+                except Exception:
+                    pass
 
 
 @app.get("/api/health")

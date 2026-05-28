@@ -10,8 +10,9 @@ from app.database import get_db
 from app.datetime_norm import assume_shanghai_if_naive, assume_utc_if_naive
 from app.deps import AuthToken
 from app.matchday import get_matchday_start, get_tz
-from app.models import Match, MatchPlayer, MatchStatus, Player
+from app.models import Match, MatchPlayer, MatchStatus, Player, SeasonPlayer, SeasonStatus
 from app.schemas import MatchCreate, MatchOut, MatchPatch, MatchPlayerBrief, MatchResult
+from app.seasons import get_active_season, get_or_create_season_player
 
 router = APIRouter(prefix="/api/matches", tags=["matches"])
 
@@ -21,35 +22,51 @@ router = APIRouter(prefix="/api/matches", tags=["matches"])
 #   - 胜者默认 +1
 #   - 被扣分负方 -1
 #   - 其他 0
-# 所有积分调整都使用 _set_match_player_delta(mp, target)：差额同步到 player.current_score。
-# 这样无论修正多少次，账目永远清晰，且可追溯。
+# 所有积分调整都通过 _set_match_player_delta(mp, season_id, target)：
+#   差额同步到该选手在 *该比赛所属赛季* 的 SeasonPlayer.current_score。
+# 这样无论修正多少次，账目永远清晰，且历史赛季的积分不会被影响。
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _set_match_player_delta(mp: MatchPlayer, target_delta: int) -> None:
-    """把某选手在本场比赛产生的积分影响调整为 target_delta，差额同步到 current_score。"""
+def _set_match_player_delta(
+    db: Session, mp: MatchPlayer, season_id: int | None, target_delta: int
+) -> None:
+    """把某选手在本场比赛产生的积分影响调整为 target_delta。
+    差额同步到该选手在「比赛所属赛季」的 SeasonPlayer.current_score。
+    若比赛没有 season_id（极少见的历史数据），则不调整赛季积分，仅更新 score_delta。"""
     diff = target_delta - mp.score_delta
-    if diff != 0:
-        mp.player.current_score = max(0, mp.player.current_score + diff)
+    if diff != 0 and season_id is not None:
+        sp = get_or_create_season_player(db, season_id, mp.player_id)
+        sp.current_score = max(0, sp.current_score + diff)
     mp.score_delta = target_delta
 
 
-def _clear_match_player_delta(mp: MatchPlayer) -> None:
-    """删除/移除选手前调用：把该选手在本场的积分影响归零（撤销曾经的加减分）。"""
-    _set_match_player_delta(mp, 0)
+def _clear_match_player_delta(db: Session, mp: MatchPlayer, season_id: int | None) -> None:
+    _set_match_player_delta(db, mp, season_id, 0)
+
+
+def _ensure_active_season_match(m: Match, db: Session) -> None:
+    """确保该比赛属于当前进行中的赛季（即可以编辑）。归档赛季的比赛禁止改动。"""
+    if m.season_id is None:
+        return
+    season = db.get(__import__("app.models", fromlist=["Season"]).Season, m.season_id)
+    if season is not None and season.status == SeasonStatus.archived:
+        raise HTTPException(status_code=400, detail="该比赛属于已归档的历史赛季，不可编辑")
 
 
 def _compute_sequence_no(db: Session, m: Match) -> int:
     """若手工指定了 sequence_no 则用之；否则按比赛日内 created_at 升序计算第几场。"""
     if m.sequence_no is not None:
         return m.sequence_no
-    earlier_count = db.scalar(
-        select(func.count(Match.id)).where(
-            Match.matchday_start == m.matchday_start,
-            Match.created_at < m.created_at,
-            Match.id != m.id,
-        )
-    ) or 0
+    # 在赛季维度内计算同比赛日的场次（避免跨赛季干扰）
+    base_q = select(func.count(Match.id)).where(
+        Match.matchday_start == m.matchday_start,
+        Match.created_at < m.created_at,
+        Match.id != m.id,
+    )
+    if m.season_id is not None:
+        base_q = base_q.where(Match.season_id == m.season_id)
+    earlier_count = db.scalar(base_q) or 0
     return earlier_count + 1
 
 
@@ -66,6 +83,7 @@ def _match_to_out(m: Match, db: Session) -> MatchOut:
     ]
     return MatchOut(
         id=m.id,
+        season_id=m.season_id,
         matchday_start=assume_shanghai_if_naive(m.matchday_start),
         actual_time=assume_utc_if_naive(m.actual_time),
         sequence_no=_compute_sequence_no(db, m),
@@ -81,6 +99,8 @@ def list_matches(
     db: Session = Depends(get_db),
     status: MatchStatus | None = Query(None),
     matchday: str | None = Query(None, description="matchday_start 的 ISO8601 字符串，精确匹配"),
+    season_id: int | None = Query(None, description="按赛季过滤，缺省=当前赛季"),
+    all_seasons: bool = Query(False, description="若为 true 则返回所有赛季的比赛"),
 ):
     q = (
         select(Match)
@@ -95,6 +115,13 @@ def list_matches(
         except ValueError:
             raise HTTPException(status_code=400, detail="matchday 格式无效")
         q = q.where(Match.matchday_start == md)
+    if not all_seasons:
+        if season_id is not None:
+            q = q.where(Match.season_id == season_id)
+        else:
+            season = get_active_season(db)
+            q = q.where(Match.season_id == season.id)
+
     matches = db.scalars(q).all()
     return [_match_to_out(m, db) for m in matches]
 
@@ -113,6 +140,7 @@ def get_match(match_id: int, _: AuthToken, db: Session = Depends(get_db)):
 
 @router.post("", response_model=MatchOut)
 def create_match(body: MatchCreate, _: AuthToken, db: Session = Depends(get_db)):
+    season = get_active_season(db)
     ids = body.player_ids
     if len(set(ids)) != 10:
         raise HTTPException(status_code=400, detail="必须选择 10 名互不相同的选手")
@@ -121,6 +149,22 @@ def create_match(body: MatchCreate, _: AuthToken, db: Session = Depends(get_db))
     if len(players) != 10:
         raise HTTPException(status_code=400, detail="存在无效的选手 ID")
 
+    # 校验每个选手都参与了当前赛季
+    sps = db.scalars(
+        select(SeasonPlayer).where(
+            SeasonPlayer.season_id == season.id,
+            SeasonPlayer.player_id.in_(ids),
+            SeasonPlayer.is_active.is_(True),
+        )
+    ).all()
+    if len(sps) != 10:
+        active_set = {sp.player_id for sp in sps}
+        missing = [p.name for p in players if p.id not in active_set]
+        raise HTTPException(
+            status_code=400,
+            detail=f"以下选手未参与当前赛季：{missing}",
+        )
+
     now = datetime.now(get_tz())
     md = get_matchday_start(now)
 
@@ -128,6 +172,7 @@ def create_match(body: MatchCreate, _: AuthToken, db: Session = Depends(get_db))
         select(MatchPlayer.player_id)
         .join(Match)
         .where(
+            Match.season_id == season.id,
             Match.status == MatchStatus.confirmed,
             Match.matchday_start == md,
             MatchPlayer.player_id.in_(ids),
@@ -139,7 +184,7 @@ def create_match(body: MatchCreate, _: AuthToken, db: Session = Depends(get_db))
             detail=f"以下选手在本比赛日已有未完成的已确认比赛：{sorted(set(busy))}",
         )
 
-    match = Match(matchday_start=md, status=MatchStatus.confirmed)
+    match = Match(season_id=season.id, matchday_start=md, status=MatchStatus.confirmed)
     db.add(match)
     db.flush()
     id_set = {p.id for p in players}
@@ -160,9 +205,7 @@ def create_match(body: MatchCreate, _: AuthToken, db: Session = Depends(get_db))
 @router.patch("/{match_id}", response_model=MatchOut)
 def patch_match(match_id: int, body: MatchPatch, _: AuthToken, db: Session = Depends(get_db)):
     """编辑已录入的比赛：比赛日 / 场次号 / 上场名单。
-
-    名单变更：被移除的选手会先撤销其在本场产生的所有积分影响（含扣分）；新加入的
-    选手 is_winner=None / score_delta=0。
+    归档赛季的比赛不可编辑。
     """
     m = db.scalars(
         select(Match)
@@ -171,6 +214,8 @@ def patch_match(match_id: int, body: MatchPatch, _: AuthToken, db: Session = Dep
     ).first()
     if not m:
         raise HTTPException(status_code=404, detail="比赛不存在")
+
+    _ensure_active_season_match(m, db)
 
     if body.matchday_start is not None:
         m.matchday_start = body.matchday_start
@@ -189,18 +234,35 @@ def patch_match(match_id: int, body: MatchPatch, _: AuthToken, db: Session = Dep
         if len(existing_players) != 10:
             raise HTTPException(status_code=400, detail="存在无效的选手 ID")
 
+        # 新加入的选手必须在当前赛季 active
+        if m.season_id is not None:
+            sps = db.scalars(
+                select(SeasonPlayer).where(
+                    SeasonPlayer.season_id == m.season_id,
+                    SeasonPlayer.player_id.in_(new_ids),
+                    SeasonPlayer.is_active.is_(True),
+                )
+            ).all()
+            if len(sps) != 10:
+                active_set = {sp.player_id for sp in sps}
+                missing = [p.name for p in existing_players if p.id not in active_set]
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"以下选手未参与当前赛季：{missing}",
+                )
+
         old_rows = list(m.players)
         old_id_to_row = {mp.player_id: mp for mp in old_rows}
         old_ids = set(old_id_to_row.keys())
         new_id_set = set(new_ids)
 
-        # 移除被踢出的选手：先撤销他们在本场的全部积分影响（无论是 +1 胜分还是 -1 扣分）
+        # 移除：撤销积分影响后删除
         for pid in old_ids - new_id_set:
             mp = old_id_to_row[pid]
-            _clear_match_player_delta(mp)
+            _clear_match_player_delta(db, mp, m.season_id)
             db.delete(mp)
 
-        # 名单变更后冲突检查
+        # 名单变更冲突检查
         if m.status == MatchStatus.confirmed:
             added_ids = list(new_id_set - old_ids)
             if added_ids:
@@ -208,6 +270,7 @@ def patch_match(match_id: int, body: MatchPatch, _: AuthToken, db: Session = Dep
                     select(MatchPlayer.player_id)
                     .join(Match)
                     .where(
+                        Match.season_id == m.season_id,
                         Match.status == MatchStatus.confirmed,
                         Match.matchday_start == m.matchday_start,
                         Match.id != m.id,
@@ -220,7 +283,7 @@ def patch_match(match_id: int, body: MatchPatch, _: AuthToken, db: Session = Dep
                         detail=f"以下新加入选手在本比赛日已有未完成的已确认比赛：{sorted(set(busy))}",
                     )
 
-        # 新增选手
+        # 新增
         for pid in new_ids:
             if pid not in old_id_to_row:
                 db.add(MatchPlayer(match_id=m.id, player_id=pid, is_winner=None))
@@ -235,21 +298,21 @@ def patch_match(match_id: int, body: MatchPatch, _: AuthToken, db: Session = Dep
     return _match_to_out(m2, db)
 
 
-def _apply_result(rows: list[MatchPlayer], win_set: set[int], deduct_set: set[int]) -> None:
-    """统一应用结果（胜者 + 扣分名单）。差额同步到选手 current_score，幂等。
-
-    每位选手的目标 delta：
-      - 胜者：+1
-      - 被扣分负方：-1
-      - 其他：0
-    """
+def _apply_result(
+    db: Session,
+    rows: list[MatchPlayer],
+    season_id: int | None,
+    win_set: set[int],
+    deduct_set: set[int],
+) -> None:
+    """统一应用结果（胜者 + 扣分名单）。差额同步到选手 current_score，幂等。"""
     for mp in rows:
         is_winner = mp.player_id in win_set
         is_deducted = mp.player_id in deduct_set
         target = (1 if is_winner else 0) + (-1 if is_deducted else 0)
         mp.is_winner = is_winner
         mp.is_deducted = is_deducted
-        _set_match_player_delta(mp, target)
+        _set_match_player_delta(db, mp, season_id, target)
 
 
 @router.patch("/{match_id}/result", response_model=MatchOut)
@@ -261,6 +324,8 @@ def submit_or_update_result(match_id: int, body: MatchResult, _: AuthToken, db: 
     ).first()
     if not m:
         raise HTTPException(status_code=404, detail="比赛不存在")
+
+    _ensure_active_season_match(m, db)
 
     winners = body.winner_player_ids
     deducted = body.deducted_player_ids or []
@@ -278,7 +343,6 @@ def submit_or_update_result(match_id: int, body: MatchResult, _: AuthToken, db: 
 
     win_set = set(winners)
     deduct_set = set(deducted)
-    # 胜者不应同时在扣分名单里
     overlap = win_set & deduct_set
     if overlap:
         raise HTTPException(
@@ -288,7 +352,7 @@ def submit_or_update_result(match_id: int, body: MatchResult, _: AuthToken, db: 
     if m.status not in (MatchStatus.confirmed, MatchStatus.completed):
         raise HTTPException(status_code=400, detail="比赛状态无效")
 
-    _apply_result(rows, win_set, deduct_set)
+    _apply_result(db, rows, m.season_id, win_set, deduct_set)
     m.status = MatchStatus.completed
 
     db.commit()
@@ -311,9 +375,11 @@ def delete_match(match_id: int, _: AuthToken, db: Session = Depends(get_db)):
     if not m:
         raise HTTPException(status_code=404, detail="比赛不存在")
 
-    # 删除前撤销该场对所有选手的积分影响
+    _ensure_active_season_match(m, db)
+
+    # 删除前撤销积分影响
     for mp in m.players:
-        _clear_match_player_delta(mp)
+        _clear_match_player_delta(db, mp, m.season_id)
 
     db.delete(m)
     db.commit()

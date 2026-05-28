@@ -36,6 +36,7 @@ export type Player = {
   name: string;
   current_score: number;
   is_online: boolean;
+  is_active: boolean;
   stats: PlayerStats;
 };
 
@@ -64,12 +65,24 @@ export type MatchPlayerBrief = {
 
 export type MatchRecord = {
   id: number;
+  season_id: number | null;
   matchday_start: string;
   actual_time: string | null;
   sequence_no: number | null;
   status: "confirmed" | "completed";
   created_at: string;
   players: MatchPlayerBrief[];
+};
+
+export type Season = {
+  id: number;
+  name: string;
+  status: "active" | "archived";
+  started_at: string;
+  ended_at: string | null;
+  is_current: boolean;
+  player_count: number;
+  match_count: number;
 };
 
 export type RankingRow = {
@@ -126,15 +139,18 @@ function buildPlayersQuery(f: PresetFilter): string {
   return s ? `?${s}` : "";
 }
 
-export async function fetchPlayers(filters: PresetFilter): Promise<Player[]> {
-  const res = await apiFetch(`/api/players${buildPlayersQuery(filters)}`);
+export async function fetchPlayers(filters: PresetFilter, includeInactive = false): Promise<Player[]> {
+  const q = buildPlayersQuery(filters);
+  const sep = q ? "&" : "?";
+  const url = `/api/players${q}${includeInactive ? `${sep}include_inactive=true` : ""}`;
+  const res = await apiFetch(url);
   if (!res.ok) throw new Error("加载选手失败");
   return res.json();
 }
 
 export async function patchPlayer(
   id: number,
-  body: { name?: string; is_online?: boolean; current_score?: number },
+  body: { name?: string; is_online?: boolean; current_score?: number; is_active?: boolean },
 ): Promise<Player> {
   const res = await apiFetch(`/api/players/${id}`, {
     method: "PATCH",
@@ -210,10 +226,14 @@ export async function createMatch(player_ids: number[]): Promise<MatchRecord> {
 export async function fetchMatches(params?: {
   status?: string;
   matchday?: string;
+  season_id?: number;
+  all_seasons?: boolean;
 }): Promise<MatchRecord[]> {
   const q = new URLSearchParams();
   if (params?.status) q.set("status", params.status);
   if (params?.matchday) q.set("matchday", params.matchday);
+  if (params?.season_id != null) q.set("season_id", String(params.season_id));
+  if (params?.all_seasons) q.set("all_seasons", "true");
   const s = q.toString();
   const res = await apiFetch(`/api/matches${s ? `?${s}` : ""}`);
   if (!res.ok) throw new Error("加载比赛列表失败");
@@ -282,8 +302,61 @@ export function formatMatchTitle(m: MatchRecord): string {
   return `【${yyyy}-${mm}-${dd}】比赛日 第${seq}场`;
 }
 
-export async function fetchRankings(): Promise<RankingRow[]> {
-  const res = await apiFetch("/api/rankings");
+export async function fetchRankings(seasonId?: number): Promise<RankingRow[]> {
+  const url = seasonId != null ? `/api/rankings?season_id=${seasonId}` : "/api/rankings";
+  const res = await apiFetch(url);
   if (!res.ok) throw new Error("加载排行榜失败");
+  return res.json();
+}
+
+// ── 赛季 ────────────────────────────────────────────────────────
+export async function fetchSeasons(): Promise<Season[]> {
+  const res = await apiFetch("/api/seasons");
+  if (!res.ok) throw new Error("加载赛季列表失败");
+  return res.json();
+}
+
+export async function fetchCurrentSeason(): Promise<Season | null> {
+  const res = await apiFetch("/api/seasons/current");
+  if (!res.ok) throw new Error("加载当前赛季失败");
+  return res.json();
+}
+
+export async function createSeason(name: string, inheritActivePlayers = true): Promise<Season> {
+  const res = await apiFetch("/api/seasons", {
+    method: "POST",
+    body: JSON.stringify({ name, inherit_active_players: inheritActivePlayers }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "创建赛季失败");
+  }
+  return res.json();
+}
+
+export async function endSeason(seasonId: number): Promise<Season> {
+  const res = await apiFetch(`/api/seasons/${seasonId}/end`, { method: "POST" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "结束赛季失败");
+  }
+  return res.json();
+}
+
+export async function rolloverSeason(
+  newSeasonName: string,
+  inheritActivePlayers = true,
+): Promise<Season> {
+  const res = await apiFetch("/api/seasons/rollover", {
+    method: "POST",
+    body: JSON.stringify({
+      new_season_name: newSeasonName,
+      inherit_active_players: inheritActivePlayers,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "切换赛季失败");
+  }
   return res.json();
 }

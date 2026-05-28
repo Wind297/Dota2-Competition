@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models import MatchStatus
+from app.models import MatchStatus, SeasonStatus
 
 
 class LoginRequest(BaseModel):
@@ -26,6 +26,7 @@ class PlayerOut(BaseModel):
     name: str
     current_score: int
     is_online: bool
+    is_active: bool = True
     stats: PlayerStats
 
     model_config = {"from_attributes": True}
@@ -40,11 +41,17 @@ class PlayerPatch(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=128)
     is_online: bool | None = None
     current_score: int | None = Field(None, ge=0)
+    is_active: bool | None = None
 
     @model_validator(mode="after")
     def at_least_one_field(self):
-        if self.name is None and self.is_online is None and self.current_score is None:
-            raise ValueError("至少需要提供 name、is_online 或 current_score 之一")
+        if (
+            self.name is None
+            and self.is_online is None
+            and self.current_score is None
+            and self.is_active is None
+        ):
+            raise ValueError("至少需要提供 name / is_online / current_score / is_active 之一")
         return self
 
 
@@ -73,6 +80,7 @@ class MatchPlayerBrief(BaseModel):
 
 class MatchOut(BaseModel):
     id: int
+    season_id: int | None = None
     matchday_start: datetime
     actual_time: datetime | None
     sequence_no: int | None = None
@@ -131,3 +139,31 @@ class PresetOut(BaseModel):
     id: str
     label: str
     filters: PresetFilter
+
+
+# ── 赛季 ─────────────────────────────────────────────────────────
+class SeasonOut(BaseModel):
+    id: int
+    name: str
+    status: SeasonStatus
+    started_at: datetime
+    ended_at: datetime | None
+    is_current: bool = False
+    player_count: int = 0
+    match_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class SeasonCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    inherit_active_players: bool = Field(
+        True,
+        description="是否把上一赛季的活跃选手自动加入新赛季（默认 True，积分清零）",
+    )
+
+
+class SeasonRollover(BaseModel):
+    """结束当前赛季并开启新赛季。"""
+    new_season_name: str = Field(..., min_length=1, max_length=64)
+    inherit_active_players: bool = True

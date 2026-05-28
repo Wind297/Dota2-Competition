@@ -108,3 +108,19 @@
 | **`开发与服务器更新指南.md`** | 给 **只写代码、不熟运维** 的作者本人：**本机 Git、推送到 GitHub、在腾讯云等服务器上更新代码并重新部署** 的逐步说明与排错。 |
 
 本地开发、环境变量名、一键部署脚本等 **操作级** 内容已全部移至 **`开发与服务器更新指南.md`**，本 README 仅作产品与规则说明。
+
+
+
+
+
+
+
+后端：
+cd "C:\Users\Jenson.Wang\OneDrive\PythonProject\Cursor\Dota2-Competition\backend"
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+前端： 报错就cmd运行
+cd "C:\Users\Jenson.Wang\OneDrive\PythonProject\Cursor\Dota2-Competition\frontend"
+npm install
+npm run dev

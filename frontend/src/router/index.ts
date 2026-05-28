@@ -6,6 +6,7 @@ import PlayersView from "@/views/PlayersView.vue";
 import MatchesView from "@/views/MatchesView.vue";
 import MatchDetailView from "@/views/MatchDetailView.vue";
 import RankingsView from "@/views/RankingsView.vue";
+import SeasonsView from "@/views/SeasonsView.vue";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -15,6 +16,7 @@ const router = createRouter({
     { path: "/matches", name: "matches", component: MatchesView },
     { path: "/matches/:id", name: "match-detail", component: MatchDetailView, props: true },
     { path: "/rankings", name: "rankings", component: RankingsView },
+    { path: "/seasons", name: "seasons", component: SeasonsView },
   ],
 });
 

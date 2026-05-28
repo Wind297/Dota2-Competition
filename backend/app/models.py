@@ -14,11 +14,40 @@ class MatchStatus(str, enum.Enum):
     completed = "completed"
 
 
+class SeasonStatus(str, enum.Enum):
+    active = "active"
+    archived = "archived"
+
+
+class Season(Base):
+    __tablename__ = "seasons"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    status: Mapped[SeasonStatus] = mapped_column(
+        Enum(SeasonStatus, native_enum=False),
+        default=SeasonStatus.active,
+        index=True,
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    season_players: Mapped[list[SeasonPlayer]] = relationship(
+        back_populates="season", cascade="all, delete-orphan"
+    )
+    matches: Mapped[list[Match]] = relationship(back_populates="season")
+
+
 class Player(Base):
+    """跨赛季的选手身份。各赛季的积分、在线状态、是否参与都在 SeasonPlayer 里。"""
     __tablename__ = "players"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    # 历史字段，新代码不再使用（赛季性数据已挪到 SeasonPlayer）。
+    # 保留为列以避免破坏老库；新建库会有这些列但都是默认值。
     current_score: Mapped[int] = mapped_column(Integer, default=0)
     is_online: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -31,12 +60,35 @@ class Player(Base):
     )
 
     match_entries: Mapped[list[MatchPlayer]] = relationship(back_populates="player")
+    season_entries: Mapped[list[SeasonPlayer]] = relationship(back_populates="player")
+
+
+class SeasonPlayer(Base):
+    """选手在某个赛季的积分、在线、参与状态。"""
+    __tablename__ = "season_players"
+    __table_args__ = (UniqueConstraint("season_id", "player_id", name="uq_season_player"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id", ondelete="CASCADE"), index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), index=True)
+    current_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_online: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False,
+        doc="选手是否参与本赛季（出现在本赛季选手池中）",
+    )
+
+    season: Mapped[Season] = relationship(back_populates="season_players")
+    player: Mapped[Player] = relationship(back_populates="season_entries")
 
 
 class Match(Base):
     __tablename__ = "matches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season_id: Mapped[int | None] = mapped_column(
+        ForeignKey("seasons.id", ondelete="CASCADE"), index=True, nullable=True
+    )
     matchday_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     actual_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sequence_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -48,7 +100,10 @@ class Match(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
-    players: Mapped[list[MatchPlayer]] = relationship(back_populates="match", cascade="all, delete-orphan")
+    season: Mapped[Season | None] = relationship(back_populates="matches")
+    players: Mapped[list[MatchPlayer]] = relationship(
+        back_populates="match", cascade="all, delete-orphan"
+    )
 
 
 class MatchPlayer(Base):
