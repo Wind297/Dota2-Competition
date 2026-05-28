@@ -195,30 +195,16 @@ def bulk_import_players(body: PlayerBulkImportBody, _: AuthToken, db: Session = 
 
 @router.delete("/{player_id}")
 def delete_player(player_id: int, _: AuthToken, db: Session = Depends(get_db)):
-    """从当前赛季移除选手（标记为 is_active=False）。
-    若该选手在本赛季已有比赛记录，将拒绝（避免数据不一致）。
-    选手实体本身不会被删除（保留历史赛季的引用）。
+    """从当前赛季移除选手（标记为 is_active=False，仅在选手池隐藏）。
+
+    历史比赛记录、积分、和队友的同场记录全部保留。
+    选手回归时直接把 is_active 改回 True 即可，积分接着累计。
+    选手实体本身不会被删除（保留跨赛季身份）。
     """
     season = get_active_season(db)
     p = db.get(Player, player_id)
     if not p:
         raise HTTPException(status_code=404, detail="选手不存在")
-
-    # 是否在本赛季有比赛记录
-    cnt = db.scalar(
-        select(func.count())
-        .select_from(MatchPlayer)
-        .join(MatchPlayer.match)
-        .where(
-            MatchPlayer.player_id == player_id,
-            MatchPlayer.match.has(season_id=season.id),
-        )
-    )
-    if cnt and cnt > 0:
-        raise HTTPException(
-            status_code=400,
-            detail="该选手在本赛季已有比赛记录，请先在「比赛记录」中删除相关场次后再操作",
-        )
 
     sp = db.scalars(
         select(SeasonPlayer).where(
@@ -229,7 +215,6 @@ def delete_player(player_id: int, _: AuthToken, db: Session = Depends(get_db)):
     if sp is None:
         # 已不在本赛季中
         return {"ok": True, "id": player_id}
-    # 软移除：标记为不参与本赛季，保留 SeasonPlayer 记录便于以后恢复
     sp.is_active = False
     db.commit()
     return {"ok": True, "id": player_id}

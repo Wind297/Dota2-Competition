@@ -259,17 +259,17 @@ async function runBulkImport() {
 
 function confirmDeletePlayer(row: Player) {
   dialog.warning({
-    title: `把「${row.name}」移出本赛季？`,
+    title: `把「${row.name}」从本赛季选手池移除？`,
     content:
-      "该选手将不再出现在本赛季选手池中（已计入的比赛和积分仍保留）。\n" +
-      "若已在本赛季有比赛记录，需先删除相关场次后才能移除。\n" +
-      "下一赛季可重新加入或继承。",
+      "该选手将在选手池里隐藏，无法被选入新比赛。\n" +
+      "已有的比赛记录、积分、和队友们的同场记录都完整保留。\n" +
+      "选手回归时点「恢复参赛」即可，积分接着累计。",
     positiveText: "移出本赛季",
     negativeText: "取消",
     onPositiveClick: async () => {
       try {
         await deletePlayer(row.id);
-        message.success("已移出本赛季");
+        message.success("已移出本赛季选手池");
         checkedRowKeys.value = checkedRowKeys.value.filter((k) => Number(k) !== row.id);
         await loadPlayers();
         return true;
