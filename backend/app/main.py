@@ -7,9 +7,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
 from app.models import (  # noqa: F401
-    Match, MatchPlayer, Player, Season, SeasonPlayer, SystemKV,
+    Match, MatchPlayer, Player, PlayerLike, PlayerTag, Season, SeasonPlayer, SystemKV, Tag,
 )
-from app.routers import auth, matches, players, presets, rankings, seasons
+from app.routers import auth, matches, players, presets, rankings, seasons, tags
 
 app = FastAPI(title="Dota2 武汉点神杯 · 个人积分赛 API")
 
@@ -27,6 +27,7 @@ app.include_router(matches.router)
 app.include_router(rankings.router)
 app.include_router(presets.router)
 app.include_router(seasons.router)
+app.include_router(tags.router)
 
 
 def _has_column(conn, table: str, col: str) -> bool:
@@ -125,6 +126,32 @@ def on_startup():
                     )
                 except Exception:
                     pass
+
+        # ── 种子标签：每次启动都补缺（已存在的不动） ─────────
+        seed_labels = [
+            "绝活哥", "责任神", "该溜子", "神来之笔", "背锅侠",
+            "节奏大师", "哈是老六", "挨打第一名", "AME", "侦察兵",
+            "Solo神", "当爹又当妈",
+        ]
+        try:
+            existing_rows = conn.exec_driver_sql("SELECT label FROM tags").fetchall()
+            existing_labels = {r[0] for r in existing_rows}
+        except Exception:
+            existing_labels = set()
+
+        from datetime import datetime as _dt, timezone as _tz
+        _now_iso = _dt.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+        for i, label in enumerate(seed_labels):
+            if label in existing_labels:
+                continue
+            try:
+                conn.exec_driver_sql(
+                    "INSERT INTO tags (label, sort_order, is_enabled, created_at) "
+                    "VALUES (?, ?, 1, ?)",
+                    (label, i, _now_iso),
+                )
+            except Exception:
+                pass
 
 
 @app.get("/api/health")

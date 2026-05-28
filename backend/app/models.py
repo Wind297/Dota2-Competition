@@ -121,6 +121,56 @@ class MatchPlayer(Base):
     player: Mapped[Player] = relationship(back_populates="match_entries")
 
 
+class Tag(Base):
+    """预定义的选手标签（绝活哥、责任神等）。管理员可启停。"""
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    label: Mapped[str] = mapped_column(String(64), unique=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class PlayerLike(Base):
+    """游客对某选手在某赛季的点赞（按 voter_token 唯一）。"""
+    __tablename__ = "player_likes"
+    __table_args__ = (
+        UniqueConstraint("season_id", "player_id", "voter_token", name="uq_player_like"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id", ondelete="CASCADE"), index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), index=True)
+    voter_token: Mapped[str] = mapped_column(String(64), index=True)
+    voter_nickname: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class PlayerTag(Base):
+    """游客给某选手在某赛季打的标签投票。"""
+    __tablename__ = "player_tags"
+    __table_args__ = (
+        UniqueConstraint(
+            "season_id", "player_id", "tag_id", "voter_token", name="uq_player_tag_vote"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season_id: Mapped[int] = mapped_column(ForeignKey("seasons.id", ondelete="CASCADE"), index=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), index=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), index=True)
+    voter_token: Mapped[str] = mapped_column(String(64), index=True)
+    voter_nickname: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class SystemKV(Base):
     __tablename__ = "system_kv"
 

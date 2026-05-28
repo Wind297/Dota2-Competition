@@ -21,6 +21,12 @@ class PlayerStats(BaseModel):
     matches_won: int = 0
 
 
+class TopTagItem(BaseModel):
+    tag_id: int
+    label: str
+    count: int
+
+
 class PlayerOut(BaseModel):
     id: int
     name: str
@@ -28,6 +34,11 @@ class PlayerOut(BaseModel):
     is_online: bool
     is_active: bool = True
     stats: PlayerStats
+    like_count: int = 0
+    total_played: int = 0
+    total_won: int = 0
+    win_rate: float = 0.0
+    top_tags: list[TopTagItem] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -167,3 +178,48 @@ class SeasonRollover(BaseModel):
     """结束当前赛季并开启新赛季。"""
     new_season_name: str = Field(..., min_length=1, max_length=64)
     inherit_active_players: bool = True
+
+
+# ── 标签 / 互动 ─────────────────────────────────────────────────
+class TagOut(BaseModel):
+    id: int
+    label: str
+    sort_order: int = 0
+    is_enabled: bool = True
+
+    model_config = {"from_attributes": True}
+
+
+class TagCreate(BaseModel):
+    label: str = Field(..., min_length=1, max_length=64)
+    sort_order: int = 0
+    is_enabled: bool = True
+
+
+class TagPatch(BaseModel):
+    label: str | None = Field(None, min_length=1, max_length=64)
+    sort_order: int | None = None
+    is_enabled: bool | None = None
+
+
+class VoteBody(BaseModel):
+    """游客互动请求（点赞/打标签都用此结构）。"""
+    voter_token: str = Field(..., min_length=4, max_length=64)
+    voter_nickname: str | None = Field(None, max_length=64)
+
+
+class TagVoteOut(BaseModel):
+    """选手社交聚合数据：本赛季的点赞数、各标签得票数、当前游客投了哪些。"""
+    like_count: int = 0
+    liked_by_me: bool = False
+    tags: list["TagVoteRow"] = Field(default_factory=list)
+
+
+class TagVoteRow(BaseModel):
+    tag_id: int
+    label: str
+    count: int = 0
+    voted_by_me: bool = False
+
+
+TagVoteOut.model_rebuild()

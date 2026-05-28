@@ -30,6 +30,7 @@ import {
 } from "@/api";
 import MainLayout from "@/components/MainLayout.vue";
 import PageHeader from "@/components/PageHeader.vue";
+import PlayerDetailModal from "@/components/PlayerDetailModal.vue";
 
 const router = useRouter();
 const message = useMessage();
@@ -65,6 +66,15 @@ const filteredPlayers = computed(() => {
 
 // 是否显示已退出本赛季的选手
 const showInactive = ref(false);
+
+// 选手详情 Modal
+const detailModalShow = ref(false);
+const detailPlayer = ref<Player | null>(null);
+
+function openPlayerDetail(p: Player) {
+  detailPlayer.value = p;
+  detailModalShow.value = true;
+}
 
 let debounceTimer: number | undefined;
 
@@ -305,14 +315,99 @@ const columns: DataTableColumns<Player> = [
     title: "选手",
     key: "name",
     sorter: (a: Player, b: Player) => a.name.localeCompare(b.name, "zh-CN"),
+    render(row: Player) {
+      const nameBtn = h(
+        NButton,
+        {
+          text: true,
+          type: "primary",
+          style: { fontWeight: "500", fontSize: "13px" },
+          onClick: () => openPlayerDetail(row),
+        },
+        { default: () => `${row.name} ›` },
+      );
+      const tagChips = (row.top_tags ?? []).map((t) =>
+        h(
+          "span",
+          { class: "mini-tag", key: t.tag_id, title: `${t.label} · ${t.count} 票` },
+          [
+            h("span", { class: "mini-tag-label" }, t.label),
+            h("span", { class: "mini-tag-count" }, String(t.count)),
+          ],
+        ),
+      );
+      return h("div", { class: "player-cell" }, [
+        nameBtn,
+        tagChips.length > 0
+          ? h("div", { class: "mini-tag-row" }, tagChips)
+          : null,
+      ]);
+    },
   },
   {
-    title: "累计积分",
+    title: "积分",
     key: "current_score",
-    width: 100,
+    width: 80,
     sorter: (a: Player, b: Player) => a.current_score - b.current_score,
     render(row: Player) {
-      return row.current_score;
+      return h(
+        "span",
+        { style: { fontFamily: '"SF Mono", "Courier New", monospace', color: "#2c6dc1", fontWeight: "600" } },
+        row.current_score,
+      );
+    },
+  },
+  {
+    title: "战绩",
+    key: "record",
+    width: 120,
+    sorter: (a: Player, b: Player) => a.win_rate - b.win_rate,
+    render(row: Player) {
+      const total = row.total_played;
+      const won = row.total_won;
+      if (total === 0) {
+        return h("span", { style: { color: "#aab3bf", fontSize: "12px" } }, "—");
+      }
+      const pct = Math.round(row.win_rate * 100);
+      return h(
+        "span",
+        { style: { fontSize: "12px", color: "#4d5663" } },
+        [
+          h(
+            "span",
+            { style: { fontFamily: '"SF Mono", "Courier New", monospace' } },
+            `${won}/${total}`,
+          ),
+          h(
+            "span",
+            {
+              style: {
+                marginLeft: "6px",
+                fontFamily: '"SF Mono", "Courier New", monospace',
+                color: pct >= 60 ? "#3a9d57" : pct >= 40 ? "#4d5663" : "#c1554a",
+                fontWeight: "600",
+              },
+            },
+            `${pct}%`,
+          ),
+        ],
+      );
+    },
+  },
+  {
+    title: "❤",
+    key: "like_count",
+    width: 70,
+    sorter: (a: Player, b: Player) => a.like_count - b.like_count,
+    render(row: Player) {
+      if (row.like_count === 0) {
+        return h("span", { style: { color: "#aab3bf", fontSize: "12px" } }, "—");
+      }
+      return h(
+        "span",
+        { style: { color: "#c1554a", fontFamily: '"SF Mono", "Courier New", monospace', fontWeight: "600" } },
+        row.like_count,
+      );
     },
   },
   ...(adminMode
@@ -320,7 +415,7 @@ const columns: DataTableColumns<Player> = [
         {
           title: "操作",
           key: "ops",
-          width: 240,
+          width: 220,
           render(row: Player) {
             const items = [
               h(
@@ -357,19 +452,15 @@ const columns: DataTableColumns<Player> = [
       ]
     : []),
   {
-    title: "今日场次",
+    title: "今日",
     key: "played",
     width: 100,
     render(row: Player) {
-      return row.stats.matches_played;
-    },
-  },
-  {
-    title: "今日胜场",
-    key: "won",
-    width: 100,
-    render(row: Player) {
-      return row.stats.matches_won;
+      return h(
+        "span",
+        { style: { fontSize: "12px", color: "#4d5663" } },
+        `${row.stats.matches_played} 场 / ${row.stats.matches_won} 胜`,
+      );
     },
   },
   ...(adminMode
@@ -377,9 +468,10 @@ const columns: DataTableColumns<Player> = [
         {
           title: "在线",
           key: "is_online",
-          width: 110,
+          width: 90,
           render(row: Player) {
             return h(NSwitch, {
+              size: "small",
               value: row.is_online,
               onUpdateValue: (v: boolean) => void onToggleOnline(row, v),
             });
@@ -390,11 +482,16 @@ const columns: DataTableColumns<Player> = [
         {
           title: "状态",
           key: "is_online",
-          width: 80,
+          width: 70,
           render(row: Player) {
             return h(
               "span",
-              { style: { color: row.is_online ? "#63e2b7" : "#666", fontSize: "12px" } },
+              {
+                style: {
+                  color: row.is_online ? "#3a9d57" : "#aab3bf",
+                  fontSize: "12px",
+                },
+              },
               row.is_online ? "在线" : "离线",
             );
           },
@@ -631,6 +728,13 @@ async function onCreateMatch() {
         </n-space>
       </n-card>
     </n-modal>
+
+    <!-- 选手详情 Modal（含点赞、标签、战绩） -->
+    <player-detail-modal
+      v-model:show="detailModalShow"
+      :player="detailPlayer"
+      @changed="loadPlayers"
+    />
   </main-layout>
 </template>
 
@@ -778,4 +882,67 @@ async function onCreateMatch() {
   color: #4d5663;
   font-weight: 500;
 }
+</style>
+
+<style>
+/* 非 scoped：因为 h() 渲染按钮，scoped 哈希不会作用到 */
+.player-name-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  color: #1a2435;
+  font-weight: 500;
+  text-align: left;
+  position: relative;
+}
+.player-name-btn:hover {
+  color: #2c6dc1;
+  text-decoration: underline;
+}
+.player-name-btn::after {
+  content: "›";
+  margin-left: 4px;
+  color: #aab3bf;
+  font-size: 14px;
+}
+.player-name-btn:hover::after {
+  color: #2c6dc1;
+}
+
+.player-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0;
+}
+.mini-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mini-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  font-size: 11px;
+  border-radius: 10px;
+  background: rgba(44, 109, 193, 0.07);
+  color: #4d5663;
+  border: 1px solid rgba(44, 109, 193, 0.18);
+  line-height: 1.5;
+}
+.mini-tag-label {
+  font-weight: 500;
+}
+.mini-tag-count {
+  font-family: '"SF Mono", "Courier New", monospace';
+  font-size: 10px;
+  color: #2c6dc1;
+  font-weight: 600;
+}
+
 </style>

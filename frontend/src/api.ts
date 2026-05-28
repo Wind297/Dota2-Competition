@@ -1,5 +1,28 @@
 export const TOKEN_KEY = "dota2_admin_token";
 export const GUEST_KEY = "dota2_guest_mode";
+export const VOTER_TOKEN_KEY = "dota2_voter_token";
+export const VOTER_NICKNAME_KEY = "dota2_voter_nickname";
+
+/** 获取游客匿名 voter token；不存在则生成。 */
+export function getVoterToken(): string {
+  let t = localStorage.getItem(VOTER_TOKEN_KEY);
+  if (!t) {
+    // 生成 UUID v4（避免依赖 crypto.randomUUID 兼容性）
+    t = "guest-" + (window.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36));
+    localStorage.setItem(VOTER_TOKEN_KEY, t);
+  }
+  return t;
+}
+
+export function getVoterNickname(): string | null {
+  return localStorage.getItem(VOTER_NICKNAME_KEY);
+}
+
+export function setVoterNickname(name: string): void {
+  const v = name.trim();
+  if (v) localStorage.setItem(VOTER_NICKNAME_KEY, v);
+  else localStorage.removeItem(VOTER_NICKNAME_KEY);
+}
 
 /** 是否以游客身份进入（无需 token） */
 export function isGuest(): boolean {
@@ -31,6 +54,12 @@ export type PlayerStats = {
   matches_won: number;
 };
 
+export type TopTagItem = {
+  tag_id: number;
+  label: string;
+  count: number;
+};
+
 export type Player = {
   id: number;
   name: string;
@@ -38,6 +67,11 @@ export type Player = {
   is_online: boolean;
   is_active: boolean;
   stats: PlayerStats;
+  like_count: number;
+  total_played: number;
+  total_won: number;
+  win_rate: number;
+  top_tags: TopTagItem[];
 };
 
 export type PresetFilter = {
@@ -357,6 +391,105 @@ export async function rolloverSeason(
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || "切换赛季失败");
+  }
+  return res.json();
+}
+
+
+// ── 互动：标签 / 点赞 ──────────────────────────────────────────
+export type Tag = {
+  id: number;
+  label: string;
+  sort_order: number;
+  is_enabled: boolean;
+};
+
+export type TagVoteRow = {
+  tag_id: number;
+  label: string;
+  count: number;
+  voted_by_me: boolean;
+};
+
+export type PlayerSocial = {
+  like_count: number;
+  liked_by_me: boolean;
+  tags: TagVoteRow[];
+};
+
+export async function fetchTags(includeDisabled = false): Promise<Tag[]> {
+  const url = includeDisabled ? "/api/tags?include_disabled=true" : "/api/tags";
+  const res = await apiFetch(url);
+  if (!res.ok) throw new Error("加载标签失败");
+  return res.json();
+}
+
+export async function createTag(label: string, sortOrder = 0): Promise<Tag> {
+  const res = await apiFetch("/api/tags", {
+    method: "POST",
+    body: JSON.stringify({ label, sort_order: sortOrder, is_enabled: true }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "创建标签失败");
+  }
+  return res.json();
+}
+
+export async function patchTag(
+  id: number,
+  body: { label?: string; sort_order?: number; is_enabled?: boolean },
+): Promise<Tag> {
+  const res = await apiFetch(`/api/tags/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "更新标签失败");
+  }
+  return res.json();
+}
+
+export async function deleteTag(id: number): Promise<void> {
+  const res = await apiFetch(`/api/tags/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "删除标签失败");
+  }
+}
+
+export async function fetchPlayerSocial(playerId: number): Promise<PlayerSocial> {
+  const token = getVoterToken();
+  const res = await apiFetch(`/api/players/${playerId}/social?voter_token=${encodeURIComponent(token)}`);
+  if (!res.ok) throw new Error("加载选手互动数据失败");
+  return res.json();
+}
+
+export async function togglePlayerLike(playerId: number): Promise<PlayerSocial> {
+  const token = getVoterToken();
+  const nickname = getVoterNickname();
+  const res = await apiFetch(`/api/players/${playerId}/like`, {
+    method: "POST",
+    body: JSON.stringify({ voter_token: token, voter_nickname: nickname }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "点赞失败");
+  }
+  return res.json();
+}
+
+export async function togglePlayerTag(playerId: number, tagId: number): Promise<PlayerSocial> {
+  const token = getVoterToken();
+  const nickname = getVoterNickname();
+  const res = await apiFetch(`/api/players/${playerId}/tags/${tagId}`, {
+    method: "POST",
+    body: JSON.stringify({ voter_token: token, voter_nickname: nickname }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "标签投票失败");
   }
   return res.json();
 }
