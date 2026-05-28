@@ -180,11 +180,20 @@ def patch_player(
     p = db.get(Player, player_id)
     if not p:
         raise HTTPException(status_code=404, detail="选手不存在")
+    if body.name is not None:
+        new_name = body.name.strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="姓名不能为空")
+        p.name = new_name
     if body.is_online is not None:
         p.is_online = body.is_online
     if body.current_score is not None:
         p.current_score = body.current_score
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="该姓名已被其他选手使用")
     db.refresh(p)
     md = get_matchday_start()
     stats_map = load_matchday_stats(db, md)

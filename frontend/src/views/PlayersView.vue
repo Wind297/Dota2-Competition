@@ -26,12 +26,17 @@ import {
   fetchPlayers,
   fetchPresets,
   patchPlayer,
+  isAdmin,
 } from "@/api";
 import MainLayout from "@/components/MainLayout.vue";
+import PageHeader from "@/components/PageHeader.vue";
 
 const router = useRouter();
 const message = useMessage();
 const dialog = useDialog();
+
+// 是否管理员模式
+const adminMode = isAdmin();
 
 const players = ref<Player[]>([]);
 const loading = ref(false);
@@ -43,10 +48,20 @@ const newInitialScore = ref<number>(0);
 
 const filters = ref<PresetFilter>({});
 
+// 本地搜索关键词
+const searchKeyword = ref("");
+
 const checkedRowKeys = ref<Array<string | number>>([]);
 
 const selectedCount = computed(() => checkedRowKeys.value.length);
 const canCreate = computed(() => selectedCount.value === 10);
+
+// 经过本地搜索过滤后的选手列表
+const filteredPlayers = computed(() => {
+  const kw = searchKeyword.value.trim().toLowerCase();
+  if (!kw) return players.value;
+  return players.value.filter((p) => p.name.toLowerCase().includes(kw));
+});
 
 let debounceTimer: number | undefined;
 
@@ -130,6 +145,7 @@ async function onToggleOnline(row: Player, val: boolean) {
   }
 }
 
+// ── 积分修改 Modal ──────────────────────────────────────────────
 const scoreModalShow = ref(false);
 const scoreEditing = ref<Player | null>(null);
 const scoreDraft = ref<number>(0);
@@ -141,6 +157,58 @@ function openScoreModal(row: Player) {
   scoreModalShow.value = true;
 }
 
+async function saveScoreFromModal() {
+  if (!scoreEditing.value) return;
+  const raw = scoreDraft.value;
+  const v = raw == null || Number.isNaN(Number(raw)) ? 0 : Math.max(0, Math.floor(Number(raw)));
+  scoreSaving.value = true;
+  try {
+    const updated = await patchPlayer(scoreEditing.value.id, { current_score: v });
+    const idx = players.value.findIndex((p) => p.id === updated.id);
+    if (idx >= 0) players.value[idx] = updated;
+    message.success("积分已更新");
+    scoreModalShow.value = false;
+  } catch (e) {
+    message.error((e as Error).message);
+  } finally {
+    scoreSaving.value = false;
+  }
+}
+
+// ── 改名 Modal ──────────────────────────────────────────────────
+const renameModalShow = ref(false);
+const renameEditing = ref<Player | null>(null);
+const renameDraft = ref("");
+const renameSaving = ref(false);
+
+function openRenameModal(row: Player) {
+  renameEditing.value = row;
+  renameDraft.value = row.name;
+  renameModalShow.value = true;
+}
+
+async function saveRename() {
+  if (!renameEditing.value) return;
+  const newNameVal = renameDraft.value.trim();
+  if (!newNameVal) {
+    message.warning("姓名不能为空");
+    return;
+  }
+  renameSaving.value = true;
+  try {
+    const updated = await patchPlayer(renameEditing.value.id, { name: newNameVal });
+    const idx = players.value.findIndex((p) => p.id === updated.id);
+    if (idx >= 0) players.value[idx] = updated;
+    message.success("姓名已更新");
+    renameModalShow.value = false;
+  } catch (e) {
+    message.error((e as Error).message);
+  } finally {
+    renameSaving.value = false;
+  }
+}
+
+// ── 批量导入 ────────────────────────────────────────────────────
 function parseBulkPlayerText(text: string): { name: string; current_score: number }[] {
   const byName = new Map<string, { name: string; current_score: number }>();
   for (const line of text.split(/\r?\n/)) {
@@ -203,24 +271,6 @@ function confirmDeletePlayer(row: Player) {
   });
 }
 
-async function saveScoreFromModal() {
-  if (!scoreEditing.value) return;
-  const raw = scoreDraft.value;
-  const v = raw == null || Number.isNaN(Number(raw)) ? 0 : Math.max(0, Math.floor(Number(raw)));
-  scoreSaving.value = true;
-  try {
-    const updated = await patchPlayer(scoreEditing.value.id, { current_score: v });
-    const idx = players.value.findIndex((p) => p.id === updated.id);
-    if (idx >= 0) players.value[idx] = updated;
-    message.success("积分已更新");
-    scoreModalShow.value = false;
-  } catch (e) {
-    message.error((e as Error).message);
-  } finally {
-    scoreSaving.value = false;
-  }
-}
-
 function onCheckedRowKeys(keys: Array<string | number>) {
   if (keys.length > 10) {
     message.warning("一场比赛最多选择 10 人");
@@ -230,46 +280,60 @@ function onCheckedRowKeys(keys: Array<string | number>) {
 }
 
 const columns: DataTableColumns<Player> = [
-  { type: "selection" },
-  { title: "选手", key: "name" },
+  ...(adminMode ? [{ type: "selection" as const }] : []),
+  {
+    title: "选手",
+    key: "name",
+    sorter: (a: Player, b: Player) => a.name.localeCompare(b.name, "zh-CN"),
+  },
   {
     title: "累计积分",
     key: "current_score",
     width: 100,
-    render(row) {
+    sorter: (a: Player, b: Player) => a.current_score - b.current_score,
+    render(row: Player) {
       return row.current_score;
     },
   },
-  {
-    title: "操作",
-    key: "ops",
-    width: 168,
-    render(row) {
-      return h(
-        NSpace,
-        { size: "small" },
+  ...(adminMode
+    ? [
         {
-          default: () => [
-            h(
-              NButton,
-              { size: "small", tertiary: true, onClick: () => openScoreModal(row) },
-              { default: () => "积分" },
-            ),
-            h(
-              NButton,
-              { size: "small", type: "error", tertiary: true, onClick: () => confirmDeletePlayer(row) },
-              { default: () => "删除" },
-            ),
-          ],
+          title: "操作",
+          key: "ops",
+          width: 210,
+          render(row: Player) {
+            return h(
+              NSpace,
+              { size: "small" },
+              {
+                default: () => [
+                  h(
+                    NButton,
+                    { size: "small", tertiary: true, onClick: () => openRenameModal(row) },
+                    { default: () => "改名" },
+                  ),
+                  h(
+                    NButton,
+                    { size: "small", tertiary: true, onClick: () => openScoreModal(row) },
+                    { default: () => "积分" },
+                  ),
+                  h(
+                    NButton,
+                    { size: "small", type: "error", tertiary: true, onClick: () => confirmDeletePlayer(row) },
+                    { default: () => "删除" },
+                  ),
+                ],
+              },
+            );
+          },
         },
-      );
-    },
-  },
+      ]
+    : []),
   {
     title: "今日场次",
     key: "played",
     width: 100,
-    render(row) {
+    render(row: Player) {
       return row.stats.matches_played;
     },
   },
@@ -277,21 +341,38 @@ const columns: DataTableColumns<Player> = [
     title: "今日胜场",
     key: "won",
     width: 100,
-    render(row) {
+    render(row: Player) {
       return row.stats.matches_won;
     },
   },
-  {
-    title: "在线",
-    key: "is_online",
-    width: 110,
-    render(row) {
-      return h(NSwitch, {
-        value: row.is_online,
-        onUpdateValue: (v: boolean) => void onToggleOnline(row, v),
-      });
-    },
-  },
+  ...(adminMode
+    ? [
+        {
+          title: "在线",
+          key: "is_online",
+          width: 110,
+          render(row: Player) {
+            return h(NSwitch, {
+              value: row.is_online,
+              onUpdateValue: (v: boolean) => void onToggleOnline(row, v),
+            });
+          },
+        },
+      ]
+    : [
+        {
+          title: "状态",
+          key: "is_online",
+          width: 80,
+          render(row: Player) {
+            return h(
+              "span",
+              { style: { color: row.is_online ? "#63e2b7" : "#666", fontSize: "12px" } },
+              row.is_online ? "在线" : "离线",
+            );
+          },
+        },
+      ]),
 ];
 
 function rowProps(row: Player) {
@@ -348,75 +429,74 @@ async function onCreateMatch() {
 
 <template>
   <main-layout>
+    <page-header
+      :title="adminMode ? '选手池' : '选手浏览'"
+      :subtitle="adminMode ? 'Player Pool' : 'Players'"
+    />
+
     <n-space vertical size="large">
-      <n-card title="快捷方案">
-        <n-space>
-          <n-tag
+      <!-- 快捷方案 -->
+      <n-card v-if="adminMode" title="快捷方案">
+        <div class="preset-list">
+          <button
             v-for="p in presets"
             :key="p.id"
-            :type="activePresetId === p.id ? 'success' : 'default'"
-            style="cursor: pointer"
+            class="preset-chip"
+            :class="{ active: activePresetId === p.id }"
             @click="applyPreset(p)"
           >
             {{ p.label }}
-          </n-tag>
-        </n-space>
+          </button>
+        </div>
       </n-card>
 
-      <n-card title="高级筛选">
-        <n-space vertical>
-          <n-space align="center" style="flex-wrap: wrap">
-            <span>积分档位</span>
-            <n-button size="small" :type="tierForUi == null ? 'primary' : 'default'" @click="tierForUi = null">
-              不限
-            </n-button>
-            <n-button size="small" :type="tierForUi === 'low' ? 'primary' : 'default'" @click="tierForUi = 'low'">
-              低分 0–4
-            </n-button>
-            <n-button size="small" :type="tierForUi === 'mid' ? 'primary' : 'default'" @click="tierForUi = 'mid'">
-              中分 5–9
-            </n-button>
-            <n-button size="small" :type="tierForUi === 'high' ? 'primary' : 'default'" @click="tierForUi = 'high'">
-              高分 ≥10
-            </n-button>
-          </n-space>
-          <n-space vertical>
-            <n-checkbox
-              :checked="chk('today_not_played')"
-              @update:checked="(v) => toggleFilter('today_not_played', v)"
-            >
-              今日未参赛
-            </n-checkbox>
-            <n-checkbox
-              :checked="chk('today_not_won')"
-              @update:checked="(v) => toggleFilter('today_not_won', v)"
-            >
-              今日未获胜
-            </n-checkbox>
-            <n-checkbox
-              :checked="chk('today_played_lte_1')"
-              @update:checked="(v) => toggleFilter('today_played_lte_1', v)"
-            >
-              今日参赛 ≤1 场
-            </n-checkbox>
-            <n-checkbox
-              :checked="chk('today_played_eq_1')"
-              @update:checked="(v) => toggleFilter('today_played_eq_1', v)"
-            >
-              今日仅参赛 1 场
-            </n-checkbox>
-            <n-checkbox :checked="chk('online_only')" @update:checked="(v) => toggleFilter('online_only', v)">
-              仅在线
-            </n-checkbox>
-          </n-space>
-        </n-space>
+      <!-- 高级筛选 -->
+      <n-card v-if="adminMode" title="高级筛选">
+        <div class="filter-row">
+          <span class="filter-key">积分档位</span>
+          <button class="tier-btn" :class="{ active: tierForUi == null }" @click="tierForUi = null">不限</button>
+          <button class="tier-btn" :class="{ active: tierForUi === 'low' }" @click="tierForUi = 'low'">低分 0–4</button>
+          <button class="tier-btn" :class="{ active: tierForUi === 'mid' }" @click="tierForUi = 'mid'">中分 5–9</button>
+          <button class="tier-btn" :class="{ active: tierForUi === 'high' }" @click="tierForUi = 'high'">高分 ≥10</button>
+        </div>
+        <div class="filter-row" style="margin-top: 12px">
+          <span class="filter-key">今日状态</span>
+          <n-checkbox :checked="chk('today_not_played')" @update:checked="(v) => toggleFilter('today_not_played', v)">
+            未参赛
+          </n-checkbox>
+          <n-checkbox :checked="chk('today_not_won')" @update:checked="(v) => toggleFilter('today_not_won', v)">
+            未获胜
+          </n-checkbox>
+          <n-checkbox :checked="chk('today_played_lte_1')" @update:checked="(v) => toggleFilter('today_played_lte_1', v)">
+            参赛 ≤1 场
+          </n-checkbox>
+          <n-checkbox :checked="chk('today_played_eq_1')" @update:checked="(v) => toggleFilter('today_played_eq_1', v)">
+            仅参赛 1 场
+          </n-checkbox>
+          <n-checkbox :checked="chk('online_only')" @update:checked="(v) => toggleFilter('online_only', v)">
+            仅在线
+          </n-checkbox>
+        </div>
       </n-card>
 
+      <!-- 选手列表 -->
       <n-card title="选手列表">
+        <template #header-extra>
+          <span class="roster-count">{{ filteredPlayers.length }} / {{ players.length }}</span>
+        </template>
+        <div class="search-bar">
+          <n-input
+            v-model:value="searchKeyword"
+            placeholder="搜索选手姓名"
+            clearable
+            size="small"
+            style="max-width: 280px"
+          />
+        </div>
         <n-data-table
           :loading="loading"
           :columns="columns"
-          :data="players"
+          :data="filteredPlayers"
           :row-key="(row: Player) => row.id"
           :checked-row-keys="checkedRowKeys"
           :row-props="rowProps"
@@ -425,70 +505,67 @@ async function onCreateMatch() {
       </n-card>
     </n-space>
 
-    <div
-      style="
-        position: sticky;
-        bottom: 0;
-        margin-top: 16px;
-        padding: 12px 16px;
-        background: rgba(24, 24, 28, 0.92);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 8px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-      "
-    >
-      <span>已选 {{ selectedCount }} / 10 人</span>
+    <!-- 创建比赛悬浮栏（仅管理员） -->
+    <div v-if="adminMode" class="create-bar">
+      <div class="create-bar-info">
+        <div class="create-progress">
+          <div class="progress-bar">
+            <div
+              class="progress-fill"
+              :style="{ width: `${Math.min(100, (selectedCount / 10) * 100)}%` }"
+            ></div>
+          </div>
+          <div class="create-bar-label">已选 <b>{{ selectedCount }}</b> / 10</div>
+        </div>
+      </div>
       <n-button type="primary" :disabled="!canCreate" :loading="creating" @click="onCreateMatch">
         创建比赛
       </n-button>
     </div>
 
-    <n-space vertical size="large" style="margin-top: 16px">
-      <n-card title="添加选手（不常用）" size="small">
-        <n-space vertical>
-          <n-text depth="3">「累计积分」为截至入库前的胜场累计分；之后在系统里录入的比赛仍会照常加减。</n-text>
-          <n-space align="center" style="flex-wrap: wrap">
-            <n-input v-model:value="newName" placeholder="选手名称" style="max-width: 240px" />
-            <n-space align="center" size="small">
-              <span>初始积分</span>
-              <n-input-number v-model:value="newInitialScore" :min="0" :precision="0" placeholder="0" style="width: 120px" />
-            </n-space>
-            <n-button type="primary" @click="onAddPlayer">添加</n-button>
-          </n-space>
+    <!-- 管理区域（仅管理员） -->
+    <n-space v-if="adminMode" vertical size="large" style="margin-top: 16px">
+      <n-card title="添加选手" size="small">
+        <div class="hint-text">「累计积分」为入库前的胜场累计；之后录入的比赛仍会照常加减。</div>
+        <n-space align="center" style="flex-wrap: wrap; margin-top: 10px" :size="10">
+          <n-input v-model:value="newName" placeholder="选手名称" style="max-width: 240px" size="small" />
+          <span class="inline-label">初始积分</span>
+          <n-input-number v-model:value="newInitialScore" :min="0" :precision="0" placeholder="0" style="width: 110px" size="small" />
+          <n-button type="primary" size="small" @click="onAddPlayer">添加</n-button>
         </n-space>
       </n-card>
 
-      <n-card title="批量导入选手（不常用）" size="small">
-        <n-space vertical>
-          <n-text depth="3">
-            每行一名选手：「姓名」或「姓名,积分」（可用英文逗号、中文逗号或 Tab 分隔）。同一姓名多行时以最后一行为准；库中已有同名选手将覆盖其累计积分。
-          </n-text>
-          <n-input
-            v-model:value="bulkText"
-            type="textarea"
-            placeholder="张三,3&#10;李四&#10;王五,0"
-            :rows="8"
-            spellcheck="false"
-          />
-          <n-button type="primary" :loading="bulkImporting" @click="runBulkImport">执行批量导入</n-button>
-        </n-space>
+      <n-card title="批量导入选手" size="small">
+        <div class="hint-text">
+          每行一名选手：「姓名」或「姓名,积分」（可用英文逗号、中文逗号或 Tab 分隔）。
+        </div>
+        <n-input
+          v-model:value="bulkText"
+          type="textarea"
+          placeholder="张三,3&#10;李四&#10;王五,0"
+          :rows="6"
+          spellcheck="false"
+          style="margin-top: 10px"
+        />
+        <div style="margin-top: 10px">
+          <n-button type="primary" size="small" :loading="bulkImporting" @click="runBulkImport">
+            执行导入
+          </n-button>
+        </div>
       </n-card>
     </n-space>
 
-    <n-modal v-model:show="scoreModalShow" :mask-closable="false" style="width: 440px">
+    <!-- 积分修改 Modal -->
+    <n-modal v-if="adminMode" v-model:show="scoreModalShow" :mask-closable="false" style="width: 440px">
       <n-card title="修改累计积分" :bordered="false" size="small">
         <n-space vertical size="large">
           <n-space vertical>
-            <n-text v-if="scoreEditing">选手：{{ scoreEditing.name }}</n-text>
+            <n-text v-if="scoreEditing">选手：<b style="color:#1a2435">{{ scoreEditing.name }}</b></n-text>
             <n-space align="center">
-              <span>累计积分（胜场数）</span>
+              <span class="inline-label">累计积分（胜场数）</span>
               <n-input-number v-model:value="scoreDraft" :min="0" :precision="0" style="width: 160px" />
             </n-space>
-            <n-text depth="3" style="font-size: 12px">用于补录线下已有成绩；积分为非负整数，后续本场内胜负仍会照常加减。</n-text>
+            <n-text depth="3" style="font-size: 12px">用于补录线下已有成绩；积分为非负整数。</n-text>
           </n-space>
           <n-space justify="end">
             <n-button @click="scoreModalShow = false">取消</n-button>
@@ -497,5 +574,171 @@ async function onCreateMatch() {
         </n-space>
       </n-card>
     </n-modal>
+
+    <!-- 改名 Modal -->
+    <n-modal v-if="adminMode" v-model:show="renameModalShow" :mask-closable="false" style="width: 440px">
+      <n-card title="修改选手姓名" :bordered="false" size="small">
+        <n-space vertical size="large">
+          <n-space vertical>
+            <n-text depth="3">可用于更新游戏 ID 或昵称，历史比赛记录中的姓名也会同步更新。</n-text>
+            <n-space align="center">
+              <span class="inline-label">姓名</span>
+              <n-input
+                v-model:value="renameDraft"
+                placeholder="新姓名"
+                style="width: 240px"
+                @keydown.enter="saveRename"
+              />
+            </n-space>
+          </n-space>
+          <n-space justify="end">
+            <n-button @click="renameModalShow = false">取消</n-button>
+            <n-button type="primary" :loading="renameSaving" @click="saveRename">保存</n-button>
+          </n-space>
+        </n-space>
+      </n-card>
+    </n-modal>
   </main-layout>
 </template>
+
+<style scoped>
+/* 快捷方案 chip */
+.preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.preset-chip {
+  background: #ffffff;
+  border: 1px solid #d8dee6;
+  color: #4d5663;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.preset-chip:hover {
+  border-color: #2c6dc1;
+  color: #2c6dc1;
+  background: rgba(44, 109, 193, 0.04);
+}
+.preset-chip.active {
+  background: #2c6dc1;
+  border-color: #2c6dc1;
+  color: #ffffff;
+  font-weight: 500;
+}
+
+/* 筛选行 */
+.filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.filter-key {
+  font-size: 12px;
+  color: #5a6473;
+  font-weight: 500;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+.tier-btn {
+  background: #ffffff;
+  border: 1px solid #d8dee6;
+  color: #4d5663;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.tier-btn:hover {
+  border-color: #2c6dc1;
+  color: #2c6dc1;
+}
+.tier-btn.active {
+  background: rgba(44, 109, 193, 0.1);
+  border-color: #2c6dc1;
+  color: #2c6dc1;
+  font-weight: 500;
+}
+
+/* 搜索栏 */
+.search-bar {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eef1f5;
+}
+.roster-count {
+  font-size: 12px;
+  color: #5a6473;
+  font-family: '"SF Mono", "Courier New", monospace';
+  font-weight: 500;
+}
+
+/* 创建比赛悬浮栏 */
+.create-bar {
+  position: sticky;
+  bottom: 16px;
+  margin-top: 20px;
+  padding: 14px 18px;
+  background: #ffffff;
+  border: 1px solid #2c6dc1;
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  box-shadow: 0 8px 24px rgba(44, 109, 193, 0.18);
+  z-index: 10;
+}
+.create-bar-info {
+  flex: 1;
+  min-width: 200px;
+}
+.create-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.progress-bar {
+  height: 4px;
+  background: #eef1f5;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2c6dc1 0%, #b97324 100%);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.create-bar-label {
+  color: #1a2435;
+  font-size: 13px;
+}
+.create-bar-label b {
+  color: #2c6dc1;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: '"SF Mono", "Courier New", monospace';
+  margin: 0 2px;
+}
+
+/* 提示文字 */
+.hint-text {
+  font-size: 12px;
+  color: #5a6473;
+  line-height: 1.6;
+}
+.inline-label {
+  font-size: 12px;
+  color: #4d5663;
+  font-weight: 500;
+}
+</style>

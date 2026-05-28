@@ -20,3 +20,10 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     maybe_reset_daily_online(db, datetime.now(get_tz()))
     token = create_access_token()
     return LoginResponse(access_token=token)
+
+
+@router.get("/guest-token", response_model=LoginResponse)
+def guest_token():
+    """游客只读 token，无需密码，前端负责限制写操作。"""
+    token = create_access_token()
+    return LoginResponse(access_token=token)

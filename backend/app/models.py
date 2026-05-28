@@ -39,6 +39,7 @@ class Match(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     matchday_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     actual_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sequence_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[MatchStatus] = mapped_column(
         Enum(MatchStatus, native_enum=False),
         default=MatchStatus.confirmed,
@@ -58,6 +59,8 @@ class MatchPlayer(Base):
     match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"), index=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), index=True)
     is_winner: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_deducted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    score_delta: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     match: Mapped[Match] = relationship(back_populates="players")
     player: Mapped[Player] = relationship(back_populates="match_entries")

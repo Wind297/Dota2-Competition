@@ -20,10 +20,12 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   const token = localStorage.getItem(TOKEN_KEY);
+
   if (to.meta.public) {
     if (token && to.name === "login") return { path: "/" };
     return true;
   }
+
   if (!token) return { path: "/login", query: { redirect: to.fullPath } };
   return true;
 });

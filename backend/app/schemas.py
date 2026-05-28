@@ -37,13 +37,14 @@ class PlayerCreate(BaseModel):
 
 
 class PlayerPatch(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=128)
     is_online: bool | None = None
     current_score: int | None = Field(None, ge=0)
 
     @model_validator(mode="after")
     def at_least_one_field(self):
-        if self.is_online is None and self.current_score is None:
-            raise ValueError("至少需要提供 is_online 或 current_score 之一")
+        if self.name is None and self.is_online is None and self.current_score is None:
+            raise ValueError("至少需要提供 name、is_online 或 current_score 之一")
         return self
 
 
@@ -66,12 +67,15 @@ class MatchPlayerBrief(BaseModel):
     player_id: int
     name: str
     is_winner: bool | None
+    is_deducted: bool = False
+    score_delta: int = 0
 
 
 class MatchOut(BaseModel):
     id: int
     matchday_start: datetime
     actual_time: datetime | None
+    sequence_no: int | None = None
     status: MatchStatus
     created_at: datetime
     players: list[MatchPlayerBrief] = Field(default_factory=list)
@@ -83,8 +87,28 @@ class MatchCreate(BaseModel):
     player_ids: list[int] = Field(..., min_length=10, max_length=10)
 
 
+class MatchPatch(BaseModel):
+    """编辑已存在的比赛：可改比赛日、场次号、上场名单。"""
+    matchday_start: datetime | None = None
+    sequence_no: int | None = Field(None, ge=1, le=999)
+    player_ids: list[int] | None = Field(None, min_length=10, max_length=10)
+    clear_sequence_no: bool = False  # 显式置空场次号
+
+    @model_validator(mode="after")
+    def at_least_one_field(self):
+        if (
+            self.matchday_start is None
+            and self.sequence_no is None
+            and self.player_ids is None
+            and not self.clear_sequence_no
+        ):
+            raise ValueError("至少需要提供一个可修改字段")
+        return self
+
+
 class MatchResult(BaseModel):
     winner_player_ids: list[int] = Field(..., min_length=5, max_length=5)
+    deducted_player_ids: list[int] = Field(default_factory=list, max_length=5)
 
 
 class RankingRow(BaseModel):

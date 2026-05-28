@@ -29,6 +29,60 @@ app.include_router(presets.router)
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+    # 轻量迁移：为已存在的表补上新增列
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        # matches.sequence_no
+        try:
+            cols = conn.exec_driver_sql("PRAGMA table_info(matches)").fetchall()
+            col_names = {c[1] for c in cols}
+            if "sequence_no" not in col_names:
+                conn.exec_driver_sql("ALTER TABLE matches ADD COLUMN sequence_no INTEGER")
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE matches ADD COLUMN sequence_no INTEGER"))
+            except Exception:
+                pass
+
+        # match_players.is_deducted, score_delta
+        try:
+            cols = conn.exec_driver_sql("PRAGMA table_info(match_players)").fetchall()
+            col_names = {c[1] for c in cols}
+            need_backfill = False
+            if "is_deducted" not in col_names:
+                conn.exec_driver_sql(
+                    "ALTER TABLE match_players ADD COLUMN is_deducted BOOLEAN NOT NULL DEFAULT 0"
+                )
+                need_backfill = True
+            if "score_delta" not in col_names:
+                conn.exec_driver_sql(
+                    "ALTER TABLE match_players ADD COLUMN score_delta INTEGER NOT NULL DEFAULT 0"
+                )
+                need_backfill = True
+            if need_backfill:
+                # 历史数据：把胜者的 score_delta 标为 +1（当时一律是 +1 的逻辑）
+                conn.exec_driver_sql(
+                    "UPDATE match_players SET score_delta = 1 WHERE is_winner = 1 AND score_delta = 0"
+                )
+        except Exception:
+            try:
+                conn.execute(text(
+                    "ALTER TABLE match_players ADD COLUMN is_deducted BOOLEAN NOT NULL DEFAULT FALSE"
+                ))
+            except Exception:
+                pass
+            try:
+                conn.execute(text(
+                    "ALTER TABLE match_players ADD COLUMN score_delta INTEGER NOT NULL DEFAULT 0"
+                ))
+            except Exception:
+                pass
+            try:
+                conn.execute(text(
+                    "UPDATE match_players SET score_delta = 1 WHERE is_winner = TRUE AND score_delta = 0"
+                ))
+            except Exception:
+                pass
 
 
 @app.get("/api/health")

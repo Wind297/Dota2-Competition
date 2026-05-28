@@ -3,8 +3,9 @@ import { h, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { NButton, NCard, NDataTable, NSelect, NTag, NSpace, useDialog, useMessage, type DataTableColumns } from "naive-ui";
 import type { MatchRecord } from "@/api";
-import { deleteMatch, fetchMatches } from "@/api";
+import { deleteMatch, fetchMatches, formatMatchTitle, isAdmin } from "@/api";
 import MainLayout from "@/components/MainLayout.vue";
+import PageHeader from "@/components/PageHeader.vue";
 
 const router = useRouter();
 const message = useMessage();
@@ -12,6 +13,7 @@ const dialog = useDialog();
 const rows = ref<MatchRecord[]>([]);
 const loading = ref(false);
 const status = ref<string | "all">("all");
+const adminMode = isAdmin();
 
 const statusOptions = [
   { label: "全部", value: "all" },
@@ -57,65 +59,115 @@ function confirmDeleteRow(row: MatchRecord) {
   });
 }
 
+function goDetail(row: MatchRecord) {
+  router.push({ name: "match-detail", params: { id: String(row.id) } });
+}
+
 const columns: DataTableColumns<MatchRecord> = [
-  { title: "ID", key: "id", width: 70 },
   {
-    title: "状态",
-    key: "status",
-    width: 100,
+    title: "ID",
+    key: "id",
+    width: 80,
     render(row) {
-      const type = row.status === "completed" ? "success" : "warning";
-      const text = row.status === "completed" ? "已完赛" : "已确认";
-      return h(NTag, { type }, { default: () => text });
+      return h(
+        "span",
+        {
+          style: {
+            color: "#7a8390",
+            fontFamily: '"SF Mono", "Courier New", monospace',
+            fontSize: "12px",
+          },
+        },
+        `#${row.id}`,
+      );
     },
   },
   {
-    title: "比赛日窗口起点",
-    key: "matchday_start",
+    title: "状态",
+    key: "status",
+    width: 110,
     render(row) {
-      return new Date(row.matchday_start).toLocaleString("zh-CN");
+      const isCompleted = row.status === "completed";
+      return h(
+        "span",
+        {
+          style: {
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "3px 10px",
+            fontSize: "12px",
+            fontWeight: "500",
+            borderRadius: "3px",
+            background: isCompleted ? "rgba(58, 157, 87, 0.10)" : "rgba(185, 115, 36, 0.10)",
+            color: isCompleted ? "#3a9d57" : "#b97324",
+          },
+        },
+        [
+          h("span", {
+            style: {
+              width: "6px",
+              height: "6px",
+              borderRadius: "50%",
+              background: "currentColor",
+            },
+          }),
+          isCompleted ? "已完赛" : "已确认",
+        ],
+      );
+    },
+  },
+  {
+    title: "比赛名称",
+    key: "title",
+    render(row) {
+      return h(
+        "span",
+        { style: { color: "#1a2435", fontSize: "13px", fontWeight: "500" } },
+        formatMatchTitle(row),
+      );
     },
   },
   {
     title: "创建时间",
     key: "created_at",
+    width: 180,
     render(row) {
-      return new Date(row.created_at).toLocaleString("zh-CN");
+      return h(
+        "span",
+        { style: { color: "#7a8390", fontSize: "12px" } },
+        new Date(row.created_at).toLocaleString("zh-CN"),
+      );
     },
   },
   {
     title: "操作",
     key: "actions",
-    width: 200,
+    width: adminMode ? 200 : 120,
     render(row) {
-      return h(
-        NSpace,
-        { size: "small" },
-        {
-          default: () => [
-            h(
-              NButton,
-              {
-                size: "small",
-                type: "primary",
-                quaternary: true,
-                onClick: () => router.push({ name: "match-detail", params: { id: String(row.id) } }),
-              },
-              { default: () => "详情" },
-            ),
-            h(
-              NButton,
-              {
-                size: "small",
-                type: "error",
-                quaternary: true,
-                onClick: () => confirmDeleteRow(row),
-              },
-              { default: () => "删除" },
-            ),
-          ],
-        },
-      );
+      const buttons: ReturnType<typeof h>[] = [
+        h(
+          "button",
+          {
+            class: "row-action-btn primary",
+            onClick: () => goDetail(row),
+          },
+          "查看详情",
+        ),
+      ];
+      if (adminMode) {
+        buttons.push(
+          h(
+            "button",
+            {
+              class: "row-action-btn danger",
+              onClick: () => confirmDeleteRow(row),
+            },
+            "删除",
+          ),
+        );
+      }
+      return h("div", { class: "row-actions" }, buttons);
     },
   },
 ];
@@ -123,13 +175,68 @@ const columns: DataTableColumns<MatchRecord> = [
 
 <template>
   <main-layout>
-    <n-card title="历史比赛">
-      <div style="margin-bottom: 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
-        <span>状态筛选</span>
-        <n-select v-model:value="status" :options="statusOptions" style="width: 200px" />
-        <n-button @click="load">刷新</n-button>
+    <page-header title="比赛记录" subtitle="Match History" />
+
+    <n-card>
+      <div class="filter-bar">
+        <span class="filter-label">状态</span>
+        <n-select v-model:value="status" :options="statusOptions" style="width: 160px" size="small" />
+        <n-button size="small" tertiary @click="load">刷新</n-button>
       </div>
       <n-data-table :loading="loading" :columns="columns" :data="rows" :row-key="(r: MatchRecord) => r.id" />
     </n-card>
   </main-layout>
 </template>
+
+<style scoped>
+.filter-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #eef1f5;
+}
+.filter-label {
+  color: #5a6473;
+  font-size: 12px;
+  font-weight: 500;
+}
+</style>
+
+<style>
+/* 操作列按钮（非 scoped，避免 h() 渲染时类名失效） */
+.row-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+.row-action-btn {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid;
+  background: #ffffff;
+  line-height: 1.4;
+}
+.row-action-btn.primary {
+  border-color: #2c6dc1;
+  color: #2c6dc1;
+}
+.row-action-btn.primary:hover {
+  background: #2c6dc1;
+  color: #ffffff;
+}
+.row-action-btn.danger {
+  border-color: #d6c0bd;
+  color: #c1554a;
+}
+.row-action-btn.danger:hover {
+  background: #c1554a;
+  color: #ffffff;
+  border-color: #c1554a;
+}
+</style>

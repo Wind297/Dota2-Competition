@@ -1,4 +1,30 @@
 export const TOKEN_KEY = "dota2_admin_token";
+export const GUEST_KEY = "dota2_guest_mode";
+
+/** 是否以游客身份进入（无需 token） */
+export function isGuest(): boolean {
+  return localStorage.getItem(GUEST_KEY) === "1";
+}
+
+/** 是否已登录管理员（有 token 且非游客模式） */
+export function isAdmin(): boolean {
+  return !!localStorage.getItem(TOKEN_KEY) && localStorage.getItem(GUEST_KEY) !== "1";
+}
+
+/** 进入游客模式：获取只读 token 并标记游客身份 */
+export async function enterGuest(): Promise<void> {
+  const res = await fetch("/api/auth/guest-token");
+  if (!res.ok) throw new Error("获取游客令牌失败");
+  const data = (await res.json()) as { access_token: string };
+  localStorage.setItem(TOKEN_KEY, data.access_token);
+  localStorage.setItem(GUEST_KEY, "1");
+}
+
+/** 退出（清除所有身份） */
+export function clearAuth(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(GUEST_KEY);
+}
 
 export type PlayerStats = {
   matches_played: number;
@@ -32,12 +58,15 @@ export type MatchPlayerBrief = {
   player_id: number;
   name: string;
   is_winner: boolean | null;
+  is_deducted: boolean;
+  score_delta: number;
 };
 
 export type MatchRecord = {
   id: number;
   matchday_start: string;
   actual_time: string | null;
+  sequence_no: number | null;
   status: "confirmed" | "completed";
   created_at: string;
   players: MatchPlayerBrief[];
@@ -65,7 +94,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   }
   const res = await fetch(path, { ...init, headers });
   if (res.status === 401) {
-    localStorage.removeItem(TOKEN_KEY);
+    clearAuth();
     window.location.assign("/login");
   }
   return res;
@@ -105,7 +134,7 @@ export async function fetchPlayers(filters: PresetFilter): Promise<Player[]> {
 
 export async function patchPlayer(
   id: number,
-  body: { is_online?: boolean; current_score?: number },
+  body: { name?: string; is_online?: boolean; current_score?: number },
 ): Promise<Player> {
   const res = await apiFetch(`/api/players/${id}`, {
     method: "PATCH",
@@ -200,10 +229,11 @@ export async function fetchMatch(id: number): Promise<MatchRecord> {
 export async function submitMatchResult(
   matchId: number,
   winner_player_ids: number[],
+  deducted_player_ids: number[] = [],
 ): Promise<MatchRecord> {
   const res = await apiFetch(`/api/matches/${matchId}/result`, {
     method: "PATCH",
-    body: JSON.stringify({ winner_player_ids }),
+    body: JSON.stringify({ winner_player_ids, deducted_player_ids }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -219,6 +249,37 @@ export async function deleteMatch(matchId: number): Promise<void> {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { detail?: string }).detail || "删除失败");
   }
+}
+
+/** 编辑已录入的比赛信息（比赛日 / 场次号 / 上场名单） */
+export async function patchMatch(
+  matchId: number,
+  body: {
+    matchday_start?: string;
+    sequence_no?: number;
+    clear_sequence_no?: boolean;
+    player_ids?: number[];
+  },
+): Promise<MatchRecord> {
+  const res = await apiFetch(`/api/matches/${matchId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "编辑比赛失败");
+  }
+  return res.json();
+}
+
+/** 生成比赛标题：【YYYY-MM-DD】比赛日 第N场 */
+export function formatMatchTitle(m: MatchRecord): string {
+  const d = new Date(m.matchday_start);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const seq = m.sequence_no ?? "?";
+  return `【${yyyy}-${mm}-${dd}】比赛日 第${seq}场`;
 }
 
 export async function fetchRankings(): Promise<RankingRow[]> {
