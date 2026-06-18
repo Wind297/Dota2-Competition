@@ -77,6 +77,10 @@ class SeasonPlayer(Base):
         Boolean, default=True, nullable=False,
         doc="选手是否参与本赛季（出现在本赛季选手池中）",
     )
+    final_rank: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+        doc="决赛名次：1=冠军, 2=亚军, 3=季军, null=未进入决赛",
+    )
 
     season: Mapped[Season] = relationship(back_populates="season_players")
     player: Mapped[Player] = relationship(back_populates="season_entries")
@@ -92,6 +96,7 @@ class Match(Base):
     matchday_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     actual_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sequence_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_practice: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[MatchStatus] = mapped_column(
         Enum(MatchStatus, native_enum=False),
         default=MatchStatus.confirmed,
@@ -122,13 +127,18 @@ class MatchPlayer(Base):
 
 
 class Tag(Base):
-    """预定义的选手标签（绝活哥、责任神等）。管理员可启停。"""
+    """预定义的选手标签。player_id=None 为公共标签（所有选手都能用），
+    否则为某个选手的专属标签（仅显示在该选手的标签栏中）。"""
     __tablename__ = "tags"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    label: Mapped[str] = mapped_column(String(64), unique=True)
+    label: Mapped[str] = mapped_column(String(64))
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    player_id: Mapped[int | None] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), nullable=True, index=True,
+        doc="null=公共标签，有值=仅该选手可见"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

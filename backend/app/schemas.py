@@ -39,6 +39,7 @@ class PlayerOut(BaseModel):
     total_won: int = 0
     win_rate: float = 0.0
     top_tags: list[TopTagItem] = Field(default_factory=list)
+    prev_season_rank: int | None = None  # 上赛季决赛名次（1/2/3 or null）
 
     model_config = {"from_attributes": True}
 
@@ -95,6 +96,7 @@ class MatchOut(BaseModel):
     matchday_start: datetime
     actual_time: datetime | None
     sequence_no: int | None = None
+    is_practice: bool = False
     status: MatchStatus
     created_at: datetime
     players: list[MatchPlayerBrief] = Field(default_factory=list)
@@ -104,14 +106,16 @@ class MatchOut(BaseModel):
 
 class MatchCreate(BaseModel):
     player_ids: list[int] = Field(..., min_length=10, max_length=10)
+    is_practice: bool = False
 
 
 class MatchPatch(BaseModel):
-    """编辑已存在的比赛：可改比赛日、场次号、上场名单。"""
+    """编辑已存在的比赛：可改比赛日、场次号、上场名单、练习赛标记。"""
     matchday_start: datetime | None = None
     sequence_no: int | None = Field(None, ge=1, le=999)
     player_ids: list[int] | None = Field(None, min_length=10, max_length=10)
-    clear_sequence_no: bool = False  # 显式置空场次号
+    clear_sequence_no: bool = False
+    is_practice: bool | None = None
 
     @model_validator(mode="after")
     def at_least_one_field(self):
@@ -120,6 +124,7 @@ class MatchPatch(BaseModel):
             and self.sequence_no is None
             and self.player_ids is None
             and not self.clear_sequence_no
+            and self.is_practice is None
         ):
             raise ValueError("至少需要提供一个可修改字段")
         return self
@@ -135,6 +140,7 @@ class RankingRow(BaseModel):
     player_id: int
     name: str
     current_score: int
+    prev_season_rank: int | None = None
 
 
 class PresetFilter(BaseModel):
@@ -180,12 +186,24 @@ class SeasonRollover(BaseModel):
     inherit_active_players: bool = True
 
 
+class FinalRankEntry(BaseModel):
+    """录入一位选手的决赛名次。"""
+    player_id: int
+    rank: int = Field(..., ge=1, le=3)  # 1=冠军, 2=亚军, 3=季军
+
+
+class FinalRankBatchBody(BaseModel):
+    """批量录入决赛名次（最多 15 人：冠亚季各 5）。"""
+    entries: list[FinalRankEntry] = Field(..., min_length=1, max_length=15)
+
+
 # ── 标签 / 互动 ─────────────────────────────────────────────────
 class TagOut(BaseModel):
     id: int
     label: str
     sort_order: int = 0
     is_enabled: bool = True
+    player_id: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -194,6 +212,7 @@ class TagCreate(BaseModel):
     label: str = Field(..., min_length=1, max_length=64)
     sort_order: int = 0
     is_enabled: bool = True
+    player_id: int | None = None  # null=公共标签，有值=仅该选手
 
 
 class TagPatch(BaseModel):

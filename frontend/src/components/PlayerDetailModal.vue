@@ -11,8 +11,10 @@ import {
 } from "naive-ui";
 import type { Player, PlayerSocial } from "@/api";
 import {
+  createTag,
   fetchPlayerSocial,
   getVoterNickname,
+  isAdmin,
   setVoterNickname,
   togglePlayerLike,
   togglePlayerTag,
@@ -29,6 +31,38 @@ const emit = defineEmits<{
 }>();
 
 const message = useMessage();
+const adminMode = isAdmin();
+
+// 管理员新建标签
+const showCreateTagModal = ref(false);
+const newTagLabel = ref("");
+const newTagIsPublic = ref(true);
+const creatingTag = ref(false);
+
+async function onCreateTag() {
+  const label = newTagLabel.value.trim();
+  if (!label) {
+    message.warning("请输入标签名");
+    return;
+  }
+  if (label.length > 16) {
+    message.warning("标签不能超过 16 字");
+    return;
+  }
+  creatingTag.value = true;
+  try {
+    const playerId = newTagIsPublic.value ? null : (props.player?.id ?? null);
+    await createTag(label, 999, playerId);
+    newTagLabel.value = "";
+    showCreateTagModal.value = false;
+    message.success("标签已创建");
+    await loadSocial(); // 刷新显示新标签
+  } catch (e) {
+    message.error((e as Error).message);
+  } finally {
+    creatingTag.value = false;
+  }
+}
 
 const social = ref<PlayerSocial | null>(null);
 const loading = ref(false);
@@ -193,6 +227,9 @@ const winRatePercent = computed(() => {
           <div class="section">
             <div class="section-title">
               <span>选手印象 · 点击投票</span>
+              <button v-if="adminMode" class="add-tag-btn" @click="showCreateTagModal = true">
+                ＋ 新建标签
+              </button>
             </div>
 
             <div class="tag-grid">
@@ -234,6 +271,44 @@ const winRatePercent = computed(() => {
         <n-space justify="end">
           <n-button @click="showNicknameModal = false">取消</n-button>
           <n-button type="primary" @click="confirmNickname">确定</n-button>
+        </n-space>
+      </n-space>
+    </n-card>
+  </n-modal>
+
+  <!-- 管理员新建标签 Modal -->
+  <n-modal v-if="adminMode" v-model:show="showCreateTagModal" :mask-closable="false" style="width: 400px">
+    <n-card title="新建标签" :bordered="false" size="small">
+      <n-space vertical size="large">
+        <div>
+          <div style="font-size: 13px; font-weight: 500; margin-bottom: 6px; color: #1a2435">标签名称</div>
+          <n-input
+            v-model:value="newTagLabel"
+            placeholder="如：团战发动机"
+            maxlength="16"
+            show-count
+            @keydown.enter="onCreateTag"
+          />
+        </div>
+        <div style="display: flex; gap: 12px; align-items: center">
+          <span style="font-size: 13px; font-weight: 500; color: #1a2435">类型：</span>
+          <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 13px">
+            <input type="radio" :value="true" v-model="newTagIsPublic" />
+            公共标签（所有选手通用）
+          </label>
+          <label style="display: flex; align-items: center; gap: 4px; cursor: pointer; font-size: 13px">
+            <input type="radio" :value="false" v-model="newTagIsPublic" />
+            专属标签（仅此选手）
+          </label>
+        </div>
+        <div style="font-size: 11px; color: #7a8390">
+          公共标签会出现在所有选手的标签栏中；专属标签仅在「{{ player?.name }}」的标签栏中显示。
+        </div>
+        <n-space justify="end">
+          <n-button @click="showCreateTagModal = false">取消</n-button>
+          <n-button type="primary" :loading="creatingTag" :disabled="!newTagLabel.trim()" @click="onCreateTag">
+            创建
+          </n-button>
         </n-space>
       </n-space>
     </n-card>
@@ -310,12 +385,30 @@ const winRatePercent = computed(() => {
   margin-top: 18px;
 }
 .section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 13px;
   color: #4d5663;
   font-weight: 500;
   margin-bottom: 10px;
   padding-bottom: 6px;
   border-bottom: 1px solid #eef1f5;
+}
+.add-tag-btn {
+  background: none;
+  border: 1px solid #d8dee6;
+  color: #2c6dc1;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.add-tag-btn:hover {
+  background: rgba(44, 109, 193, 0.08);
+  border-color: #2c6dc1;
 }
 
 /* 点赞按钮 */

@@ -316,16 +316,28 @@ const columns: DataTableColumns<Player> = [
     key: "name",
     sorter: (a: Player, b: Player) => a.name.localeCompare(b.name, "zh-CN"),
     render(row: Player) {
-      const nameBtn = h(
-        NButton,
+      // 奖牌图标
+      const medal =
+        row.prev_season_rank === 1
+          ? "🥇"
+          : row.prev_season_rank === 2
+            ? "🥈"
+            : row.prev_season_rank === 3
+              ? "🥉"
+              : null;
+
+      const nameEl = h(
+        "span",
         {
-          text: true,
-          type: "primary",
-          style: { fontWeight: "500", fontSize: "13px" },
+          class: "player-name-link",
           onClick: () => openPlayerDetail(row),
         },
-        { default: () => `${row.name} ›` },
+        [
+          medal ? h("span", { class: "player-medal" }, medal) : null,
+          h("span", null, row.name),
+        ],
       );
+
       const tagChips = (row.top_tags ?? []).map((t) =>
         h(
           "span",
@@ -337,7 +349,7 @@ const columns: DataTableColumns<Player> = [
         ),
       );
       return h("div", { class: "player-cell" }, [
-        nameBtn,
+        nameEl,
         tagChips.length > 0
           ? h("div", { class: "mini-tag-row" }, tagChips)
           : null,
@@ -536,15 +548,16 @@ async function onAddPlayer() {
 }
 
 const creating = ref(false);
+const isPractice = ref(false);
 
 async function onCreateMatch() {
   if (!canCreate.value) return;
   creating.value = true;
   try {
     const ids = checkedRowKeys.value.map((k) => Number(k));
-    const m = await createMatch(ids);
+    const m = await createMatch(ids, isPractice.value);
     checkedRowKeys.value = [];
-    message.success("比赛已创建");
+    message.success(isPractice.value ? "练习赛已创建" : "比赛已创建");
     await router.push({ name: "match-detail", params: { id: String(m.id) } });
   } catch (e) {
     message.error((e as Error).message);
@@ -635,7 +648,7 @@ async function onCreateMatch() {
       </n-card>
     </n-space>
 
-    <!-- 创建比赛悬浮栏（仅管理员） -->
+    <!-- 创建比赛悬浮栏（仅管理员），fixed 在屏幕底部 -->
     <div v-if="adminMode" class="create-bar">
       <div class="create-bar-info">
         <div class="create-progress">
@@ -648,13 +661,16 @@ async function onCreateMatch() {
           <div class="create-bar-label">已选 <b>{{ selectedCount }}</b> / 10</div>
         </div>
       </div>
+      <n-checkbox v-model:checked="isPractice" style="flex-shrink: 0">
+        <span style="font-size: 12px">练习赛（不计积分）</span>
+      </n-checkbox>
       <n-button type="primary" :disabled="!canCreate" :loading="creating" @click="onCreateMatch">
         创建比赛
       </n-button>
     </div>
 
     <!-- 管理区域（仅管理员） -->
-    <n-space v-if="adminMode" vertical size="large" style="margin-top: 16px">
+    <n-space v-if="adminMode" vertical size="large" style="margin-top: 16px; padding-bottom: 80px">
       <n-card title="添加选手" size="small">
         <div class="hint-text">「累计积分」为入库前的胜场累计；之后录入的比赛仍会照常加减。</div>
         <n-space align="center" style="flex-wrap: wrap; margin-top: 10px" :size="10">
@@ -821,12 +837,15 @@ async function onCreateMatch() {
   font-weight: 500;
 }
 
-/* 创建比赛悬浮栏 */
+/* 创建比赛悬浮栏 - fixed 在视口底部 */
 .create-bar {
-  position: sticky;
+  position: fixed;
   bottom: 16px;
-  margin-top: 20px;
-  padding: 14px 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 48px);
+  max-width: 1240px;
+  padding: 12px 18px;
   background: #ffffff;
   border: 1px solid #2c6dc1;
   border-radius: 8px;
@@ -835,8 +854,8 @@ async function onCreateMatch() {
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
-  box-shadow: 0 8px 24px rgba(44, 109, 193, 0.18);
-  z-index: 10;
+  box-shadow: 0 8px 24px rgba(44, 109, 193, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+  z-index: 50;
 }
 .create-bar-info {
   flex: 1;
@@ -886,6 +905,24 @@ async function onCreateMatch() {
 
 <style>
 /* 非 scoped：因为 h() 渲染按钮，scoped 哈希不会作用到 */
+.player-name-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1a2435;
+  font-weight: 500;
+  padding: 3px 0;
+  transition: color 0.15s;
+}
+.player-name-link:hover {
+  color: #2c6dc1;
+}
+.player-medal {
+  font-size: 15px;
+  line-height: 1;
+}
 .player-name-btn {
   background: none;
   border: none;

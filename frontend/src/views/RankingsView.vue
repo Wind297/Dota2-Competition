@@ -119,15 +119,29 @@ const columns: DataTableColumns<RankingRow> = [
     key: "name",
     render(row) {
       const isTop3 = row.rank <= 3;
+      const medal =
+        row.prev_season_rank === 1
+          ? "🥇"
+          : row.prev_season_rank === 2
+            ? "🥈"
+            : row.prev_season_rank === 3
+              ? "🥉"
+              : null;
       return h(
         "span",
         {
           style: {
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "5px",
             color: "#1a2435",
             fontWeight: isTop3 ? "600" : "400",
           },
         },
-        row.name,
+        [
+          medal ? h("span", { style: { fontSize: "14px" } }, medal) : null,
+          h("span", null, row.name),
+        ],
       );
     },
   },

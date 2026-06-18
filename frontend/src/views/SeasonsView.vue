@@ -15,14 +15,18 @@ import {
   useMessage,
   type DataTableColumns,
 } from "naive-ui";
-import type { Season } from "@/api";
+import type { Season, FinalRankEntry, Player } from "@/api";
 import {
   createSeason,
   endSeason,
+  fetchPlayers,
   fetchSeasons,
+  getFinalRanks,
   isAdmin,
   rolloverSeason,
+  setFinalRanks,
 } from "@/api";
+import { NSelect } from "naive-ui";
 import MainLayout from "@/components/MainLayout.vue";
 import PageHeader from "@/components/PageHeader.vue";
 
@@ -139,6 +143,70 @@ function viewRankings(s: Season) {
   router.push({ path: "/rankings", query: { season_id: String(s.id) } });
 }
 
+// ── 录入决赛名次 Modal ──────────────────────────────────────────
+const rankModalShow = ref(false);
+const rankSeasonId = ref<number | null>(null);
+const rankSeasonName = ref("");
+const rankSaving = ref(false);
+const allPlayers = ref<{ label: string; value: number }[]>([]);
+
+// 名次数据：冠军5人、亚军5人、季军5人
+const champIds = ref<number[]>([]);
+const runnerUpIds = ref<number[]>([]);
+const thirdIds = ref<number[]>([]);
+
+async function openRankModal(s: Season) {
+  rankSeasonId.value = s.id;
+  rankSeasonName.value = s.name;
+  rankSaving.value = false;
+
+  // 加载选手列表作为选项
+  try {
+    const players = await fetchPlayers({}, true);
+    allPlayers.value = players.map((p) => ({ label: p.name, value: p.id }));
+  } catch {
+    message.error("加载选手列表失败");
+    return;
+  }
+
+  // 加载已有名次
+  try {
+    const existing = await getFinalRanks(s.id);
+    champIds.value = existing.filter((e) => e.rank === 1).map((e) => e.player_id);
+    runnerUpIds.value = existing.filter((e) => e.rank === 2).map((e) => e.player_id);
+    thirdIds.value = existing.filter((e) => e.rank === 3).map((e) => e.player_id);
+  } catch {
+    champIds.value = [];
+    runnerUpIds.value = [];
+    thirdIds.value = [];
+  }
+
+  rankModalShow.value = true;
+}
+
+async function saveRanks() {
+  if (!rankSeasonId.value) return;
+  const entries: FinalRankEntry[] = [
+    ...champIds.value.map((id) => ({ player_id: id, rank: 1 })),
+    ...runnerUpIds.value.map((id) => ({ player_id: id, rank: 2 })),
+    ...thirdIds.value.map((id) => ({ player_id: id, rank: 3 })),
+  ];
+  if (entries.length === 0) {
+    message.warning("请至少选择一名选手");
+    return;
+  }
+  rankSaving.value = true;
+  try {
+    await setFinalRanks(rankSeasonId.value, entries);
+    message.success("名次已保存");
+    rankModalShow.value = false;
+  } catch (e) {
+    message.error((e as Error).message);
+  } finally {
+    rankSaving.value = false;
+  }
+}
+
 const columns: DataTableColumns<Season> = [
   {
     title: "赛季",
@@ -229,7 +297,7 @@ const columns: DataTableColumns<Season> = [
   {
     title: "操作",
     key: "actions",
-    width: 220,
+    width: 300,
     render(row) {
       const buttons: ReturnType<typeof h>[] = [
         h(
@@ -241,6 +309,18 @@ const columns: DataTableColumns<Season> = [
           "查看排行榜",
         ),
       ];
+      if (adminMode) {
+        buttons.push(
+          h(
+            "button",
+            {
+              class: "row-action-btn primary",
+              onClick: () => openRankModal(row),
+            },
+            "录入名次",
+          ),
+        );
+      }
       if (adminMode && row.is_current) {
         buttons.push(
           h(
@@ -341,6 +421,62 @@ const newSeasonBtnLabel = computed(() => {
         </n-space>
       </n-card>
     </n-modal>
+    <!-- 录入名次 Modal -->
+    <n-modal v-if="adminMode" v-model:show="rankModalShow" :mask-closable="false" style="width: 560px">
+      <n-card :title="`录入决赛名次 · ${rankSeasonName}`" :bordered="false" size="small">
+        <n-space vertical size="large">
+          <n-text depth="3">
+            选择冠军、亚军、季军队伍（各 5 人）。可反复录入覆盖之前的数据。
+          </n-text>
+
+          <div>
+            <div class="rank-label">🥇 冠军（5 人）</div>
+            <n-select
+              v-model:value="champIds"
+              multiple
+              filterable
+              :options="allPlayers"
+              :max-tag-count="5"
+              placeholder="搜索并选择冠军队伍"
+              style="width: 100%"
+            />
+          </div>
+
+          <div>
+            <div class="rank-label">🥈 亚军（5 人）</div>
+            <n-select
+              v-model:value="runnerUpIds"
+              multiple
+              filterable
+              :options="allPlayers"
+              :max-tag-count="5"
+              placeholder="搜索并选择亚军队伍"
+              style="width: 100%"
+            />
+          </div>
+
+          <div>
+            <div class="rank-label">🥉 季军（5 人）</div>
+            <n-select
+              v-model:value="thirdIds"
+              multiple
+              filterable
+              :options="allPlayers"
+              :max-tag-count="5"
+              placeholder="搜索并选择季军队伍"
+              style="width: 100%"
+            />
+          </div>
+
+          <n-space justify="end">
+            <n-button @click="rankModalShow = false">取消</n-button>
+            <n-button type="primary" :loading="rankSaving" @click="saveRanks">
+              保存名次
+            </n-button>
+          </n-space>
+        </n-space>
+      </n-card>
+    </n-modal>
   </main-layout>
 </template>
 
@@ -364,6 +500,12 @@ const newSeasonBtnLabel = computed(() => {
   font-size: 11px;
   color: #7a8390;
   margin-top: 5px;
+}
+.rank-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a2435;
+  margin-bottom: 6px;
 }
 </style>
 

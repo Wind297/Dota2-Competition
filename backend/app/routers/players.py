@@ -101,6 +101,7 @@ def _player_to_out(
     total_won: int = 0,
     like_count: int = 0,
     top_tags: list[TopTagItem] | None = None,
+    prev_season_rank: int | None = None,
 ) -> PlayerOut:
     win_rate = (total_won / total_played) if total_played > 0 else 0.0
     return PlayerOut(
@@ -115,6 +116,7 @@ def _player_to_out(
         total_won=total_won,
         win_rate=win_rate,
         top_tags=top_tags or [],
+        prev_season_rank=prev_season_rank,
     )
 
 
@@ -213,6 +215,24 @@ def list_players(
     like_map = _load_like_counts(db, season.id)
     top_tags_map = _load_top_tags(db, season.id, top_n=5)
 
+    # 上赛季名次
+    from app.models import Season as _Season, SeasonStatus as _SS
+    prev_season = db.scalars(
+        select(_Season).where(
+            _Season.status == _SS.archived,
+            _Season.id < season.id,
+        ).order_by(_Season.id.desc())
+    ).first()
+    prev_rank_map: dict[int, int] = {}
+    if prev_season:
+        rank_rows = db.execute(
+            select(SeasonPlayer.player_id, SeasonPlayer.final_rank).where(
+                SeasonPlayer.season_id == prev_season.id,
+                SeasonPlayer.final_rank.isnot(None),
+            )
+        ).all()
+        prev_rank_map = {int(pid): int(r) for pid, r in rank_rows}
+
     rows = db.execute(
         select(SeasonPlayer, Player)
         .join(Player, Player.id == SeasonPlayer.player_id)
@@ -241,6 +261,7 @@ def list_players(
             total_played=tp, total_won=tw,
             like_count=like_map.get(p.id, 0),
             top_tags=top_tags_map.get(p.id, []),
+            prev_season_rank=prev_rank_map.get(p.id),
         ))
     return out
 
@@ -417,9 +438,13 @@ def get_player_social(
         ).all()
         my_tag_ids = {int(t) for t in rows}
 
-    # 拉所有 enabled 的 Tag，按 sort_order
+    # 拉所有 enabled 的 Tag：公共（player_id IS NULL）+ 该选手专属（player_id=player_id）
+    from sqlalchemy import or_
     all_tags = db.scalars(
-        select(Tag).where(Tag.is_enabled.is_(True)).order_by(Tag.sort_order, Tag.id)
+        select(Tag).where(
+            Tag.is_enabled.is_(True),
+            or_(Tag.player_id.is_(None), Tag.player_id == player_id),
+        ).order_by(Tag.sort_order, Tag.id)
     ).all()
     rows_out: list[TagVoteRow] = []
     for t in all_tags:

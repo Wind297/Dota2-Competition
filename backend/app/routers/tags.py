@@ -30,7 +30,12 @@ def create_tag(body: TagCreate, _: AuthToken, db: Session = Depends(get_db)):
     label = body.label.strip()
     if not label:
         raise HTTPException(status_code=400, detail="标签不能为空")
-    t = Tag(label=label, sort_order=body.sort_order, is_enabled=body.is_enabled)
+    t = Tag(
+        label=label,
+        sort_order=body.sort_order,
+        is_enabled=body.is_enabled,
+        player_id=body.player_id,
+    )
     db.add(t)
     try:
         db.commit()

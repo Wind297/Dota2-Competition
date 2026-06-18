@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import AuthToken
 from app.models import Match, Player, Season, SeasonPlayer, SeasonStatus
-from app.schemas import SeasonCreate, SeasonOut, SeasonRollover
+from app.schemas import SeasonCreate, SeasonOut, SeasonRollover, FinalRankBatchBody
 from app.seasons import get_active_season_or_none
 
 router = APIRouter(prefix="/api/seasons", tags=["seasons"])
@@ -164,3 +164,64 @@ def rollover_season(body: SeasonRollover, _: AuthToken, db: Session = Depends(ge
     db.commit()
     db.refresh(new_s)
     return _season_to_out(new_s, db, current_id=new_s.id)
+
+
+@router.post("/{season_id}/ranks")
+def set_final_ranks(season_id: int, body: FinalRankBatchBody, _: AuthToken, db: Session = Depends(get_db)):
+    """批量录入某赛季的决赛名次。可反复调用覆盖。"""
+    s = db.get(Season, season_id)
+    if s is None:
+        raise HTTPException(status_code=404, detail="赛季不存在")
+
+    # 先清除该赛季所有已有名次
+    db.execute(
+        select(SeasonPlayer)
+        .where(SeasonPlayer.season_id == season_id, SeasonPlayer.final_rank.isnot(None))
+    )
+    from sqlalchemy import update
+    db.execute(
+        update(SeasonPlayer)
+        .where(SeasonPlayer.season_id == season_id)
+        .values(final_rank=None)
+    )
+
+    # 写入新名次
+    for entry in body.entries:
+        sp = db.scalars(
+            select(SeasonPlayer).where(
+                SeasonPlayer.season_id == season_id,
+                SeasonPlayer.player_id == entry.player_id,
+            )
+        ).first()
+        if sp is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"选手 ID {entry.player_id} 不在赛季 {season_id} 中",
+            )
+        sp.final_rank = entry.rank
+
+    db.commit()
+    return {"ok": True, "count": len(body.entries)}
+
+
+@router.get("/{season_id}/ranks")
+def get_final_ranks(season_id: int, _: AuthToken, db: Session = Depends(get_db)):
+    """获取某赛季的决赛名次列表。"""
+    s = db.get(Season, season_id)
+    if s is None:
+        raise HTTPException(status_code=404, detail="赛季不存在")
+
+    rows = db.execute(
+        select(SeasonPlayer.player_id, SeasonPlayer.final_rank, Player.name)
+        .join(Player, Player.id == SeasonPlayer.player_id)
+        .where(
+            SeasonPlayer.season_id == season_id,
+            SeasonPlayer.final_rank.isnot(None),
+        )
+        .order_by(SeasonPlayer.final_rank, Player.name)
+    ).all()
+
+    return [
+        {"player_id": int(pid), "rank": int(r), "name": name}
+        for pid, r, name in rows
+    ]

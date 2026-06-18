@@ -72,6 +72,7 @@ export type Player = {
   total_won: number;
   win_rate: number;
   top_tags: TopTagItem[];
+  prev_season_rank: number | null;
 };
 
 export type PresetFilter = {
@@ -103,6 +104,7 @@ export type MatchRecord = {
   matchday_start: string;
   actual_time: string | null;
   sequence_no: number | null;
+  is_practice: boolean;
   status: "confirmed" | "completed";
   created_at: string;
   players: MatchPlayerBrief[];
@@ -124,6 +126,7 @@ export type RankingRow = {
   player_id: number;
   name: string;
   current_score: number;
+  prev_season_rank: number | null;
 };
 
 function authHeaders(): HeadersInit {
@@ -245,10 +248,10 @@ export async function fetchPresets(): Promise<Preset[]> {
   return res.json();
 }
 
-export async function createMatch(player_ids: number[]): Promise<MatchRecord> {
+export async function createMatch(player_ids: number[], is_practice = false): Promise<MatchRecord> {
   const res = await apiFetch("/api/matches", {
     method: "POST",
-    body: JSON.stringify({ player_ids }),
+    body: JSON.stringify({ player_ids, is_practice }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -333,7 +336,8 @@ export function formatMatchTitle(m: MatchRecord): string {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   const seq = m.sequence_no ?? "?";
-  return `【${yyyy}-${mm}-${dd}】比赛日 第${seq}场`;
+  const prefix = m.is_practice ? "【练习】" : "";
+  return `${prefix}【${yyyy}-${mm}-${dd}】比赛日 第${seq}场`;
 }
 
 export async function fetchRankings(seasonId?: number): Promise<RankingRow[]> {
@@ -395,6 +399,25 @@ export async function rolloverSeason(
   return res.json();
 }
 
+export type FinalRankEntry = { player_id: number; rank: number; name?: string };
+
+export async function setFinalRanks(seasonId: number, entries: FinalRankEntry[]): Promise<void> {
+  const res = await apiFetch(`/api/seasons/${seasonId}/ranks`, {
+    method: "POST",
+    body: JSON.stringify({ entries }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "录入名次失败");
+  }
+}
+
+export async function getFinalRanks(seasonId: number): Promise<FinalRankEntry[]> {
+  const res = await apiFetch(`/api/seasons/${seasonId}/ranks`);
+  if (!res.ok) throw new Error("加载名次失败");
+  return res.json();
+}
+
 
 // ── 互动：标签 / 点赞 ──────────────────────────────────────────
 export type Tag = {
@@ -424,10 +447,10 @@ export async function fetchTags(includeDisabled = false): Promise<Tag[]> {
   return res.json();
 }
 
-export async function createTag(label: string, sortOrder = 0): Promise<Tag> {
+export async function createTag(label: string, sortOrder = 0, playerId: number | null = null): Promise<Tag> {
   const res = await apiFetch("/api/tags", {
     method: "POST",
-    body: JSON.stringify({ label, sort_order: sortOrder, is_enabled: true }),
+    body: JSON.stringify({ label, sort_order: sortOrder, is_enabled: true, player_id: playerId }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

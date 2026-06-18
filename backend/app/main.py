@@ -60,6 +60,12 @@ def on_startup():
             _safe_alter(conn, "ALTER TABLE matches ADD COLUMN sequence_no INTEGER")
         if not _has_column(conn, "matches", "season_id"):
             _safe_alter(conn, "ALTER TABLE matches ADD COLUMN season_id INTEGER")
+        if not _has_column(conn, "matches", "is_practice"):
+            _safe_alter(conn, "ALTER TABLE matches ADD COLUMN is_practice BOOLEAN NOT NULL DEFAULT 0")
+        if not _has_column(conn, "tags", "player_id"):
+            _safe_alter(conn, "ALTER TABLE tags ADD COLUMN player_id INTEGER")
+        if not _has_column(conn, "season_players", "final_rank"):
+            _safe_alter(conn, "ALTER TABLE season_players ADD COLUMN final_rank INTEGER")
 
         if not _has_column(conn, "match_players", "is_deducted"):
             _safe_alter(conn, "ALTER TABLE match_players ADD COLUMN is_deducted BOOLEAN NOT NULL DEFAULT 0")
