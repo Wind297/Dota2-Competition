@@ -347,6 +347,29 @@ export async function fetchRankings(seasonId?: number): Promise<RankingRow[]> {
   return res.json();
 }
 
+// ── 全局配置 ────────────────────────────────────────────────────────
+export type AppConfig = {
+  deduct_threshold: number;
+};
+
+export async function fetchConfig(): Promise<AppConfig> {
+  const res = await apiFetch("/api/config");
+  if (!res.ok) throw new Error("加载配置失败");
+  return res.json();
+}
+
+export async function updateDeductThreshold(deduct_threshold: number): Promise<AppConfig> {
+  const res = await apiFetch("/api/config", {
+    method: "PATCH",
+    body: JSON.stringify({ deduct_threshold }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "更新扣分阈值失败");
+  }
+  return res.json();
+}
+
 // ── 赛季 ────────────────────────────────────────────────────────
 export async function fetchSeasons(): Promise<Season[]> {
   const res = await apiFetch("/api/seasons");

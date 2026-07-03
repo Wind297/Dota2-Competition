@@ -117,6 +117,7 @@
 
 后端：
 cd "C:\Users\Jenson.Wang\OneDrive\PythonProject\Cursor\Dota2-Competition\backend"
+cd "C:\Users\Admin\OneDrive\PythonProject\Cursor\Dota2-Competition\backend"
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 

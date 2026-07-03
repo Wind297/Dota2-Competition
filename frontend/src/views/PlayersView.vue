@@ -31,6 +31,7 @@ import {
 import MainLayout from "@/components/MainLayout.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import PlayerDetailModal from "@/components/PlayerDetailModal.vue";
+import { deductThreshold, saveDeductThreshold } from "@/config";
 
 const router = useRouter();
 const message = useMessage();
@@ -177,7 +178,7 @@ function openScoreModal(row: Player) {
 async function saveScoreFromModal() {
   if (!scoreEditing.value) return;
   const raw = scoreDraft.value;
-  const v = raw == null || Number.isNaN(Number(raw)) ? 0 : Math.max(0, Math.floor(Number(raw)));
+  const v = raw == null || Number.isNaN(Number(raw)) ? 0 : Math.floor(Number(raw));
   scoreSaving.value = true;
   try {
     const updated = await patchPlayer(scoreEditing.value.id, { current_score: v });
@@ -550,6 +551,31 @@ async function onAddPlayer() {
 const creating = ref(false);
 const isPractice = ref(false);
 
+// ── 扣分阈值（全局可调，存后端 SystemKV，影响未来比赛）──────────
+const thresholdDraft = ref(deductThreshold.value);
+watch(deductThreshold, (v) => {
+  thresholdDraft.value = v;
+});
+const savingThreshold = ref(false);
+async function onThresholdBlur() {
+  const v = Math.round(Number(thresholdDraft.value));
+  if (!Number.isFinite(v) || v < 0) {
+    thresholdDraft.value = deductThreshold.value;
+    return;
+  }
+  if (v === deductThreshold.value) return;
+  savingThreshold.value = true;
+  try {
+    await saveDeductThreshold(v);
+    message.success(`扣分阈值已更新为 ${v}`);
+  } catch (e) {
+    thresholdDraft.value = deductThreshold.value;
+    message.error((e as Error).message);
+  } finally {
+    savingThreshold.value = false;
+  }
+}
+
 async function onCreateMatch() {
   if (!canCreate.value) return;
   creating.value = true;
@@ -661,6 +687,18 @@ async function onCreateMatch() {
           <div class="create-bar-label">已选 <b>{{ selectedCount }}</b> / 10</div>
         </div>
       </div>
+      <div class="threshold-control">
+        <span class="threshold-label">扣分阈值</span>
+        <n-input-number
+          v-model:value="thresholdDraft"
+          :min="0"
+          :max="99"
+          size="small"
+          style="width: 88px"
+          :disabled="savingThreshold"
+          @blur="onThresholdBlur"
+        />
+      </div>
       <n-checkbox v-model:checked="isPractice" style="flex-shrink: 0">
         <span style="font-size: 12px">练习赛（不计积分）</span>
       </n-checkbox>
@@ -709,9 +747,9 @@ async function onCreateMatch() {
             <n-text v-if="scoreEditing">选手：<b style="color:#1a2435">{{ scoreEditing.name }}</b></n-text>
             <n-space align="center">
               <span class="inline-label">累计积分（胜场数）</span>
-              <n-input-number v-model:value="scoreDraft" :min="0" :precision="0" style="width: 160px" />
+              <n-input-number v-model:value="scoreDraft" :precision="0" style="width: 160px" />
             </n-space>
-            <n-text depth="3" style="font-size: 12px">用于补录线下已有成绩；积分为非负整数。</n-text>
+            <n-text depth="3" style="font-size: 12px">用于补录线下已有成绩或修正历史扣分；可填负数。</n-text>
           </n-space>
           <n-space justify="end">
             <n-button @click="scoreModalShow = false">取消</n-button>
@@ -888,6 +926,17 @@ async function onCreateMatch() {
   font-weight: 700;
   font-family: '"SF Mono", "Courier New", monospace';
   margin: 0 2px;
+}
+.threshold-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.threshold-label {
+  font-size: 12px;
+  color: #4d5663;
+  white-space: nowrap;
 }
 
 /* 提示文字 */

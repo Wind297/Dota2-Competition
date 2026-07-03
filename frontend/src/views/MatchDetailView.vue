@@ -27,6 +27,7 @@ import {
 } from "@/api";
 import MainLayout from "@/components/MainLayout.vue";
 import PageHeader from "@/components/PageHeader.vue";
+import { deductThreshold } from "@/config";
 
 const props = defineProps<{ id: string }>();
 const router = useRouter();
@@ -86,6 +87,20 @@ const canSaveWinnerCorrection = computed(() => {
 
 const matchTitle = computed(() => (match.value ? formatMatchTitle(match.value) : ""));
 
+// ── 老板队友识别（名字含"老板"的选手的同侧队友，仅展示用）──────────
+const bossTeammateIds = computed<Set<number>>(() => {
+  if (!match.value) return new Set();
+  const players = match.value.players;
+  const boss = players.find((p) => p.name && p.name.includes("老板"));
+  if (!boss || boss.is_winner === null || boss.is_winner === undefined) return new Set();
+  const ids = new Set<number>();
+  for (const p of players) {
+    if (p.player_id === boss.player_id) continue;
+    if (p.is_winner === boss.is_winner) ids.add(p.player_id);
+  }
+  return ids;
+});
+
 // ── 扣分确认 Modal ──────────────────────────────────────────────
 type DeductCandidate = { player_id: number; name: string; current_score: number; deduct: boolean };
 const deductModalShow = ref(false);
@@ -96,7 +111,8 @@ const pendingWinnerIds = ref<number[]>([]);
 // 本次弹扣分框是首次提交还是修正
 const deductModeForCorrection = ref(false);
 
-/** 计算「现在的负方中谁积分 >10」。
+/** 计算「现在的负方中谁基础积分 > 扣分阈值」，作为默认规则的扣分候选。
+ *  老板队友（和名字含"老板"的选手同侧的其他 4 人）走强制 ±2，不进此列表。
  *  注意：现有 player.current_score 已经包含了本场比赛此前产生的 score_delta。
  *  为了得到「不计本场的真实积分」，需要减去 score_delta。 */
 async function buildDeductCandidates(winnerIds: Set<number>): Promise<DeductCandidate[]> {
@@ -105,13 +121,20 @@ async function buildDeductCandidates(winnerIds: Set<number>): Promise<DeductCand
   const scoreMap = new Map<number, number>();
   for (const p of allPlayers) scoreMap.set(p.id, p.current_score);
 
+  // 识别老板（名字含"老板"），其同侧队友走强制 ±2，不进默认扣分候选
+  const boss = match.value.players.find((p) => p.name && p.name.includes("老板"));
+  const bossId = boss?.player_id;
+  const bossIsWinner = bossId !== undefined && winnerIds.has(bossId);
+
   const candidates: DeductCandidate[] = [];
   for (const mp of match.value.players) {
     if (winnerIds.has(mp.player_id)) continue;
+    // 老板在负方时，负方其余 4 人是老板队友（强制 -2），排除
+    if (bossId !== undefined && mp.player_id !== bossId && !bossIsWinner) continue;
     const currentScore = scoreMap.get(mp.player_id) ?? 0;
     // 还原为「不计本场影响」的积分
     const baseScore = currentScore - mp.score_delta;
-    if (baseScore > 10) {
+    if (baseScore > deductThreshold.value) {
       candidates.push({
         player_id: mp.player_id,
         name: mp.name,
@@ -137,7 +160,7 @@ async function submitFlow(opts: { isCorrection: boolean }) {
       deductCandidates.value = candidates;
       deductModalShow.value = true;
     } else {
-      // 没有 >10 分的负方，直接提交（不带扣分名单）
+      // 没有超过扣分阈值的负方，直接提交（不带扣分名单）
       await submitMatchResult(match.value.id, Array.from(winnerIds), []);
       message.success(opts.isCorrection ? "已更新结果与积分" : "结果已保存");
       if (opts.isCorrection) await load();
@@ -418,6 +441,7 @@ function deltaColor(delta: number): string {
                 {{ p.is_winner ? "胜" : "负" }}
               </span>
               <span v-if="p.is_deducted" class="result-pill pill-deduct">扣分</span>
+              <span v-if="bossTeammateIds.has(p.player_id)" class="result-pill pill-boss">老板队友</span>
               <span
                 v-if="match.status === 'completed' && p.score_delta !== 0"
                 class="delta-badge"
@@ -432,7 +456,7 @@ function deltaColor(delta: number): string {
 
       <!-- 提示 -->
       <div class="hint-box" v-if="adminMode && match.status === 'confirmed'">
-        请勾选恰好 5 名获胜者后提交结果。若负方有积分 &gt; 10 的选手，将弹出扣分确认。
+        请勾选恰好 5 名获胜者后提交结果。若负方有积分 &gt; {{ deductThreshold }} 的选手，将弹出扣分确认。
       </div>
       <div class="hint-box" v-if="adminMode && match.status === 'completed'">
         如需纠错：调整胜者勾选（仍为恰好 5 人）后点「保存胜者修正」，会重新核算本场加减分。
@@ -470,7 +494,7 @@ function deltaColor(delta: number): string {
       <n-card title="是否对负方高分选手扣分？" :bordered="false" size="small">
         <n-space vertical size="large">
           <n-text depth="3">
-            以下负方选手积分 &gt; 10 分（不计本场影响），根据当前规则可扣分（每人 -1）。
+            以下负方选手积分 &gt; {{ deductThreshold }} 分（不计本场影响），根据当前规则可扣分（每人 -1）。
             勾选要扣分的选手后确认，或点「跳过」不扣分。
           </n-text>
           <n-space vertical>
@@ -702,6 +726,10 @@ function deltaColor(delta: number): string {
 .pill-deduct {
   background: rgba(193, 85, 74, 0.12);
   color: #a64238;
+}
+.pill-boss {
+  background: rgba(185, 115, 36, 0.16);
+  color: #8f5819;
 }
 .delta-badge {
   font-family: '"SF Mono", "Courier New", monospace';

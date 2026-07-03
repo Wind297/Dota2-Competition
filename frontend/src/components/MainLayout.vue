@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { NLayout, NLayoutContent, NLayoutHeader } from "naive-ui";
 import { useRouter, useRoute } from "vue-router";
 import { TOKEN_KEY, GUEST_KEY, clearAuth, fetchCurrentSeason, type Season } from "@/api";
+import { loadConfig } from "@/config";
 
 const router = useRouter();
 const route = useRoute();
@@ -20,7 +21,10 @@ async function loadCurrentSeason() {
   }
 }
 
-onMounted(loadCurrentSeason);
+onMounted(() => {
+  loadCurrentSeason();
+  loadConfig();
+});
 
 function logout() {
   clearAuth();

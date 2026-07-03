@@ -52,7 +52,7 @@ class PlayerCreate(BaseModel):
 class PlayerPatch(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=128)
     is_online: bool | None = None
-    current_score: int | None = Field(None, ge=0)
+    current_score: int | None = Field(None)  # 允许负分（老板队友扣 2 等场景）
     is_active: bool | None = None
 
     @model_validator(mode="after")
@@ -133,6 +133,15 @@ class MatchPatch(BaseModel):
 class MatchResult(BaseModel):
     winner_player_ids: list[int] = Field(..., min_length=5, max_length=5)
     deducted_player_ids: list[int] = Field(default_factory=list, max_length=5)
+
+
+# ── 全局配置 ─────────────────────────────────────────────────────
+class ConfigOut(BaseModel):
+    deduct_threshold: int
+
+
+class ConfigPatch(BaseModel):
+    deduct_threshold: int = Field(..., ge=0)
 
 
 class RankingRow(BaseModel):

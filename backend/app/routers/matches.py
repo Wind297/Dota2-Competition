@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.config_helpers import get_deduct_threshold
 from app.database import get_db
 from app.datetime_norm import assume_shanghai_if_naive, assume_utc_if_naive
 from app.deps import AuthToken
@@ -19,12 +20,13 @@ router = APIRouter(prefix="/api/matches", tags=["matches"])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 积分核心：每个 MatchPlayer.score_delta 是该场对该选手的净积分影响。
-#   - 胜者默认 +1
-#   - 被扣分负方 -1
-#   - 其他 0
+#   - 默认规则：胜者 +1，被扣分负方 -1，其他 0
+#   - 老板规则：名字含"老板"的选手在场时，与其同侧的队友赢了 +2、输了 -2（无条件，
+#     不受扣分阈值约束、不进扣分确认弹窗）；老板本人与老板对手方仍走默认规则
 # 所有积分调整都通过 _set_match_player_delta(mp, season_id, target)：
 #   差额同步到该选手在 *该比赛所属赛季* 的 SeasonPlayer.current_score。
 # 这样无论修正多少次，账目永远清晰，且历史赛季的积分不会被影响。
+# current_score 允许为负（老板队友扣 2 等场景可能扣成负分）。
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -36,7 +38,7 @@ def _set_match_player_delta(
     diff = target_delta - mp.score_delta
     if diff != 0 and season_id is not None and not skip_score:
         sp = get_or_create_season_player(db, season_id, mp.player_id)
-        sp.current_score = max(0, sp.current_score + diff)
+        sp.current_score = sp.current_score + diff
     mp.score_delta = target_delta
 
 
@@ -309,15 +311,30 @@ def _apply_result(
     deduct_set: set[int],
     *,
     skip_score: bool = False,
+    boss_player_id: int | None = None,
 ) -> None:
-    """统一应用结果（胜者 + 扣分名单）。差额同步到选手 current_score，幂等。
-    skip_score=True（练习赛）时仅记录胜负标记，不改积分。"""
+    """统一应用结果。差额同步到选手 current_score，幂等。
+    skip_score=True（练习赛）时仅记录胜负标记，不改积分。
+    boss_player_id 非 None 时，与老板同侧的其他 4 名队友按 ±2 记分（无条件，不受
+    deduct_set 影响、is_deducted 置 False）；老板本人与老板对手方仍走默认规则。"""
+    boss_is_winner = boss_player_id in win_set if boss_player_id is not None else None
     for mp in rows:
         is_winner = mp.player_id in win_set
-        is_deducted = mp.player_id in deduct_set
-        target = (1 if is_winner else 0) + (-1 if is_deducted else 0)
-        mp.is_winner = is_winner
-        mp.is_deducted = is_deducted
+        if (
+            boss_player_id is not None
+            and mp.player_id != boss_player_id
+            and is_winner == boss_is_winner
+        ):
+            # 老板队友：强制 ±2，不走扣分名单
+            target = 2 if is_winner else -2
+            mp.is_winner = is_winner
+            mp.is_deducted = False
+        else:
+            # 默认规则（无老板 / 老板本人 / 老板对手）
+            is_deducted = mp.player_id in deduct_set
+            target = (1 if is_winner else 0) + (-1 if is_deducted else 0)
+            mp.is_winner = is_winner
+            mp.is_deducted = is_deducted
         _set_match_player_delta(db, mp, season_id, target, skip_score=skip_score)
 
 
@@ -358,7 +375,40 @@ def submit_or_update_result(match_id: int, body: MatchResult, _: AuthToken, db: 
     if m.status not in (MatchStatus.confirmed, MatchStatus.completed):
         raise HTTPException(status_code=400, detail="比赛状态无效")
 
-    _apply_result(db, rows, m.season_id, win_set, deduct_set, skip_score=m.is_practice)
+    # ── 老板识别：名字含"老板"的选手，最多 1 名 ───────────────
+    boss_candidates = [mp for mp in rows if mp.player.name and "老板" in mp.player.name]
+    if len(boss_candidates) > 1:
+        names = "、".join(mp.player.name for mp in boss_candidates)
+        raise HTTPException(
+            status_code=400, detail=f"一场比赛最多 1 名老板（名字含'老板'）选手，当前有：{names}"
+        )
+    boss_player_id = boss_candidates[0].player_id if boss_candidates else None
+
+    # ── 扣分阈值校验（防前端绕过）──────────────────────────
+    # 老板队友走强制 ±2 不进 deduct_set，故只需校验 deduct_set 中的默认规则选手。
+    threshold = get_deduct_threshold(db)
+    if deduct_set and m.season_id is not None:
+        for pid in deduct_set:
+            mp = next(mp for mp in rows if mp.player_id == pid)
+            sp = db.scalars(
+                select(SeasonPlayer).where(
+                    SeasonPlayer.season_id == m.season_id,
+                    SeasonPlayer.player_id == pid,
+                )
+            ).first()
+            current_score = sp.current_score if sp else 0
+            # current_score 已含本场此前产生的 score_delta，减去得到"不计本场影响"的基础积分
+            base = current_score - mp.score_delta
+            if base <= threshold:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"选手 {mp.player.name} 基础积分 {base} 未超过阈值 {threshold}，不可扣分",
+                )
+
+    _apply_result(
+        db, rows, m.season_id, win_set, deduct_set,
+        skip_score=m.is_practice, boss_player_id=boss_player_id,
+    )
     m.status = MatchStatus.completed
 
     db.commit()

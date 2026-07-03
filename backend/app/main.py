@@ -9,7 +9,7 @@ from app.database import Base, engine
 from app.models import (  # noqa: F401
     Match, MatchPlayer, Player, PlayerLike, PlayerTag, Season, SeasonPlayer, SystemKV, Tag,
 )
-from app.routers import auth, matches, players, presets, rankings, seasons, tags
+from app.routers import auth, config, matches, players, presets, rankings, seasons, tags
 
 app = FastAPI(title="Dota2 武汉点神杯 · 个人积分赛 API")
 
@@ -22,6 +22,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(config.router)
 app.include_router(players.router)
 app.include_router(matches.router)
 app.include_router(rankings.router)
@@ -158,6 +159,20 @@ def on_startup():
                 )
             except Exception:
                 pass
+
+        # ── 全局扣分阈值初始化（默认 8）─────────────────────
+        from app.config_helpers import DEDUCT_THRESHOLD_KEY, DEFAULT_DEDUCT_THRESHOLD
+        try:
+            has_threshold = conn.exec_driver_sql(
+                "SELECT value FROM system_kv WHERE key = ?", (DEDUCT_THRESHOLD_KEY,)
+            ).fetchone()
+            if has_threshold is None:
+                conn.exec_driver_sql(
+                    "INSERT INTO system_kv (key, value) VALUES (?, ?)",
+                    (DEDUCT_THRESHOLD_KEY, str(DEFAULT_DEDUCT_THRESHOLD)),
+                )
+        except Exception:
+            pass
 
 
 @app.get("/api/health")
