@@ -6,6 +6,7 @@ import type { RankingRow, Season } from "@/api";
 import { fetchRankings, fetchSeasons } from "@/api";
 import MainLayout from "@/components/MainLayout.vue";
 import PageHeader from "@/components/PageHeader.vue";
+import { useIsMobile } from "@/composables/useIsMobile";
 
 const route = useRoute();
 const router = useRouter();
@@ -15,6 +16,7 @@ const loading = ref(false);
 const seasons = ref<Season[]>([]);
 // null = 当前赛季
 const selectedSeasonId = ref<number | null>(null);
+const isMobile = useIsMobile();
 
 const seasonOptions = computed(() => {
   const opts: { label: string; value: number | null }[] = [
@@ -83,88 +85,135 @@ function rankColor(rank: number): string {
   return "#7a8390";
 }
 
-const columns: DataTableColumns<RankingRow> = [
+function renderRankBadge(row: RankingRow) {
+  const color = rankColor(row.rank);
+  const isTop3 = row.rank <= 3;
+  return h(
+    "div",
+    {
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: "32px",
+        height: "26px",
+        padding: "0 10px",
+        background: isTop3 ? `${color}1a` : "#f6f8fb",
+        border: isTop3 ? `1px solid ${color}55` : "1px solid #e8ecf2",
+        borderRadius: "3px",
+        color: color,
+        fontWeight: isTop3 ? "700" : "500",
+        fontSize: "13px",
+        fontFamily: '"SF Mono", "Courier New", monospace',
+      },
+    },
+    String(row.rank).padStart(2, "0"),
+  );
+}
+
+function renderPlayerCell(row: RankingRow, compact: boolean) {
+  const isTop3 = row.rank <= 3;
+  const medal =
+    row.prev_season_rank === 1
+      ? "🥇"
+      : row.prev_season_rank === 2
+        ? "🥈"
+        : row.prev_season_rank === 3
+          ? "🥉"
+          : null;
+  const nameRow = h(
+    "span",
+    {
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "5px",
+        color: "#1a2435",
+        fontWeight: isTop3 ? "600" : "400",
+        fontSize: compact ? "14px" : "13px",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        maxWidth: "100%",
+      },
+    },
+    [
+      medal ? h("span", { style: { fontSize: "14px" } }, medal) : null,
+      h("span", null, row.name),
+    ],
+  );
+  const tagChips = (row.top_tags ?? []).slice(0, 3).map((t) =>
+    h(
+      "span",
+      { class: "mini-tag", key: t.tag_id, title: `${t.label} · ${t.count} 票` },
+      [
+        h("span", { class: "mini-tag-label" }, t.label),
+        h("span", { class: "mini-tag-count" }, String(t.count)),
+      ],
+    ),
+  );
+  const tagRow = tagChips.length > 0 ? h("div", { class: "mini-tag-row" }, tagChips) : null;
+  return h("div", { class: "rk-player-cell" }, [nameRow, tagRow].filter(Boolean));
+}
+
+function renderScoreCell(row: RankingRow, compact: boolean) {
+  return h(
+    "span",
+    {
+      style: {
+        color: "#2c6dc1",
+        fontWeight: "600",
+        fontSize: compact ? "16px" : "15px",
+        fontFamily: '"SF Mono", "Courier New", monospace',
+      },
+    },
+    row.current_score,
+  );
+}
+
+const desktopColumns: DataTableColumns<RankingRow> = [
   {
     title: "名次",
     key: "rank",
     width: 90,
-    render(row) {
-      const color = rankColor(row.rank);
-      const isTop3 = row.rank <= 3;
-      return h(
-        "div",
-        {
-          style: {
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minWidth: "32px",
-            height: "26px",
-            padding: "0 10px",
-            background: isTop3 ? `${color}1a` : "#f6f8fb",
-            border: isTop3 ? `1px solid ${color}55` : "1px solid #e8ecf2",
-            borderRadius: "3px",
-            color: color,
-            fontWeight: isTop3 ? "700" : "500",
-            fontSize: "13px",
-            fontFamily: '"SF Mono", "Courier New", monospace',
-          },
-        },
-        String(row.rank).padStart(2, "0"),
-      );
-    },
+    render: renderRankBadge,
   },
   {
     title: "选手",
     key: "name",
-    render(row) {
-      const isTop3 = row.rank <= 3;
-      const medal =
-        row.prev_season_rank === 1
-          ? "🥇"
-          : row.prev_season_rank === 2
-            ? "🥈"
-            : row.prev_season_rank === 3
-              ? "🥉"
-              : null;
-      return h(
-        "span",
-        {
-          style: {
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "5px",
-            color: "#1a2435",
-            fontWeight: isTop3 ? "600" : "400",
-          },
-        },
-        [
-          medal ? h("span", { style: { fontSize: "14px" } }, medal) : null,
-          h("span", null, row.name),
-        ],
-      );
-    },
+    render: (row) => renderPlayerCell(row, false),
   },
   {
     title: "积分",
     key: "current_score",
     width: 140,
-    render(row) {
-      return h(
-        "span",
-        {
-          style: {
-            color: "#2c6dc1",
-            fontWeight: "600",
-            fontSize: "15px",
-            fontFamily: '"SF Mono", "Courier New", monospace',
-          },
-        },
-        row.current_score,
-      );
-    },
+    render: (row) => renderScoreCell(row, false),
   },
 ];
+
+const mobileColumns: DataTableColumns<RankingRow> = [
+  {
+    title: "名次",
+    key: "rank",
+    width: 56,
+    render: renderRankBadge,
+  },
+  {
+    title: "选手",
+    key: "name",
+    render: (row) => renderPlayerCell(row, true),
+  },
+  {
+    title: "积分",
+    key: "current_score",
+    width: 70,
+    render: (row) => renderScoreCell(row, true),
+  },
+];
+
+const columns = computed<DataTableColumns<RankingRow>>(() =>
+  isMobile.value ? mobileColumns : desktopColumns,
+);
 </script>
 
 <template>
@@ -206,5 +255,42 @@ const columns: DataTableColumns<RankingRow> = [
   color: #5a6473;
   font-size: 12px;
   font-weight: 500;
+}
+</style>
+
+<style>
+/* h() 渲染的单元格需要非 scoped；与 PlayersView 的 mini-tag 样式保持一致 */
+.rk-player-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0;
+  min-width: 0;
+}
+.mini-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mini-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  font-size: 11px;
+  border-radius: 10px;
+  background: rgba(44, 109, 193, 0.07);
+  color: #4d5663;
+  border: 1px solid rgba(44, 109, 193, 0.18);
+  line-height: 1.5;
+}
+.mini-tag-label {
+  font-weight: 500;
+}
+.mini-tag-count {
+  font-family: '"SF Mono", "Courier New", monospace';
+  font-size: 10px;
+  color: #2c6dc1;
+  font-weight: 600;
 }
 </style>

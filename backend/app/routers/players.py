@@ -26,7 +26,7 @@ from app.schemas import (
     VoteBody,
 )
 from app.seasons import get_active_season, get_or_create_season_player
-from app.stats import load_matchday_stats
+from app.stats import load_matchday_stats, load_top_tags_for_season
 
 router = APIRouter(prefix="/api/players", tags=["players"])
 
@@ -54,42 +54,6 @@ def _load_like_counts(db: Session, season_id: int) -> dict[int, int]:
         .group_by(PlayerLike.player_id)
     ).all()
     return {int(pid): int(c) for pid, c in rows}
-
-
-def _load_top_tags(db: Session, season_id: int, top_n: int = 5) -> dict[int, list[TopTagItem]]:
-    """返回 player_id -> 该选手在本赛季得票最多的前 N 个标签（带 label）。"""
-    # 1) 先聚合 (player_id, tag_id) -> count
-    rows = db.execute(
-        select(
-            PlayerTag.player_id,
-            PlayerTag.tag_id,
-            func.count(PlayerTag.id).label("cnt"),
-        )
-        .where(PlayerTag.season_id == season_id)
-        .group_by(PlayerTag.player_id, PlayerTag.tag_id)
-    ).all()
-    if not rows:
-        return {}
-
-    # 2) 拉所有涉及到的 tag label
-    tag_ids = {int(r[1]) for r in rows}
-    tag_labels: dict[int, str] = {}
-    if tag_ids:
-        for t in db.scalars(select(Tag).where(Tag.id.in_(tag_ids))).all():
-            tag_labels[t.id] = t.label
-
-    # 3) 按 player 聚集，按得票降序取前 N
-    by_player: dict[int, list[tuple[int, int]]] = {}
-    for pid, tid, cnt in rows:
-        by_player.setdefault(int(pid), []).append((int(tid), int(cnt)))
-    out: dict[int, list[TopTagItem]] = {}
-    for pid, items in by_player.items():
-        items.sort(key=lambda x: (-x[1], x[0]))  # 票数降序，再按 tag_id 稳定排序
-        out[pid] = [
-            TopTagItem(tag_id=tid, label=tag_labels.get(tid, f"#{tid}"), count=cnt)
-            for tid, cnt in items[:top_n]
-        ]
-    return out
 
 
 def _player_to_out(
@@ -213,7 +177,7 @@ def list_players(
     today_stats = load_matchday_stats(db, md, season_id=season.id)
     total_stats = _load_player_total_stats(db, season.id)
     like_map = _load_like_counts(db, season.id)
-    top_tags_map = _load_top_tags(db, season.id, top_n=5)
+    top_tags_map = load_top_tags_for_season(db, season.id, top_n=5)
 
     # 上赛季名次
     from app.models import Season as _Season, SeasonStatus as _SS
@@ -359,7 +323,7 @@ def patch_player(
     today_stats = load_matchday_stats(db, md, season_id=season.id)
     total_stats = _load_player_total_stats(db, season.id)
     like_map = _load_like_counts(db, season.id)
-    top_tags_map = _load_top_tags(db, season.id, top_n=5)
+    top_tags_map = load_top_tags_for_season(db, season.id, top_n=5)
     played, won = today_stats.get(p.id, (0, 0))
     tp, tw = total_stats.get(p.id, (0, 0))
     return _player_to_out(

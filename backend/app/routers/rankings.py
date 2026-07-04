@@ -7,6 +7,7 @@ from app.deps import AuthToken
 from app.models import Player, Season, SeasonPlayer, SeasonStatus
 from app.schemas import RankingRow
 from app.seasons import get_active_season
+from app.stats import load_top_tags_for_season
 
 router = APIRouter(prefix="/api/rankings", tags=["rankings"])
 
@@ -41,6 +42,8 @@ def rankings(
         ).all()
         prev_rank_map = {int(pid): int(r) for pid, r in rank_rows}
 
+    top_tags_map = load_top_tags_for_season(db, season_id, top_n=3)
+
     rows = db.execute(
         select(SeasonPlayer, Player)
         .join(Player, Player.id == SeasonPlayer.player_id)
@@ -60,6 +63,7 @@ def rankings(
                 name=p.name,
                 current_score=sp.current_score,
                 prev_season_rank=prev_rank_map.get(p.id),
+                top_tags=top_tags_map.get(p.id, []),
             )
         )
     return out

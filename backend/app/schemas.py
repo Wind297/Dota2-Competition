@@ -150,6 +150,7 @@ class RankingRow(BaseModel):
     name: str
     current_score: int
     prev_season_rank: int | None = None
+    top_tags: list[TopTagItem] = Field(default_factory=list)
 
 
 class PresetFilter(BaseModel):

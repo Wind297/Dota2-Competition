@@ -6,12 +6,12 @@ import {
   NCard,
   NCheckbox,
   NDataTable,
+  NDropdown,
   NInput,
   NInputNumber,
   NModal,
   NSpace,
   NSwitch,
-  NTag,
   NText,
   useDialog,
   useMessage,
@@ -31,6 +31,7 @@ import {
 import MainLayout from "@/components/MainLayout.vue";
 import PageHeader from "@/components/PageHeader.vue";
 import PlayerDetailModal from "@/components/PlayerDetailModal.vue";
+import { useIsMobile } from "@/composables/useIsMobile";
 import { deductThreshold, saveDeductThreshold } from "@/config";
 
 const router = useRouter();
@@ -39,6 +40,7 @@ const dialog = useDialog();
 
 // 是否管理员模式
 const adminMode = isAdmin();
+const isMobile = useIsMobile();
 
 const players = ref<Player[]>([]);
 const loading = ref(false);
@@ -310,7 +312,7 @@ function onCheckedRowKeys(keys: Array<string | number>) {
   checkedRowKeys.value = keys;
 }
 
-const columns: DataTableColumns<Player> = [
+const desktopColumns: DataTableColumns<Player> = [
   ...(adminMode ? [{ type: "selection" as const }] : []),
   {
     title: "选手",
@@ -511,6 +513,168 @@ const columns: DataTableColumns<Player> = [
         },
       ]),
 ];
+
+// ── 移动端列组：手机下列数更少，关键信息竖排紧凑单元格 ──
+function renderMobilePlayerCell(row: Player) {
+  const medal =
+    row.prev_season_rank === 1
+      ? "🥇"
+      : row.prev_season_rank === 2
+        ? "🥈"
+        : row.prev_season_rank === 3
+          ? "🥉"
+          : null;
+
+  // 第一行：奖牌 + 姓名 + 在线圆点
+  const nameRow = h("div", { class: "m-player-name-row" }, [
+    medal ? h("span", { class: "player-medal" }, medal) : null,
+    h(
+      "span",
+      {
+        class: "player-name-link",
+        onClick: () => openPlayerDetail(row),
+      },
+      row.name,
+    ),
+    h(
+      "span",
+      {
+        class: ["m-online-dot", row.is_online ? "online" : "offline"],
+        title: row.is_online ? "在线" : "离线",
+      },
+    ),
+  ]);
+
+  // 第二行：mini tag chips（最多 3 个）
+  const tagChips = (row.top_tags ?? []).slice(0, 3).map((t) =>
+    h(
+      "span",
+      { class: "mini-tag", key: t.tag_id, title: `${t.label} · ${t.count} 票` },
+      [
+        h("span", { class: "mini-tag-label" }, t.label),
+        h("span", { class: "mini-tag-count" }, String(t.count)),
+      ],
+    ),
+  );
+  const tagRow = tagChips.length > 0 ? h("div", { class: "mini-tag-row" }, tagChips) : null;
+
+  // 第三行：今日 X 场 Y 胜
+  const todayRow = h(
+    "div",
+    { class: "m-today-line" },
+    `今日 ${row.stats.matches_played} 场 · ${row.stats.matches_won} 胜`,
+  );
+
+  return h("div", { class: "m-player-cell" }, [nameRow, tagRow, todayRow].filter(Boolean));
+}
+
+function renderMobileStatsCell(row: Player) {
+  const total = row.total_played;
+  const won = row.total_won;
+  const pct = total === 0 ? null : Math.round(row.win_rate * 100);
+  return h("div", { class: "m-stats-cell" }, [
+    h(
+      "span",
+      { class: "m-stats-score" },
+      row.current_score,
+    ),
+    h(
+      "div",
+      { class: "m-stats-sub" },
+      [
+        h("span", null, total > 0 ? `${won}/${total}` : "—"),
+        pct != null
+          ? h(
+              "span",
+              {
+                class: "m-stats-pct",
+                style: {
+                  color: pct >= 60 ? "#3a9d57" : pct >= 40 ? "#4d5663" : "#c1554a",
+                },
+              },
+              `${pct}%`,
+            )
+          : null,
+      ].filter(Boolean),
+    ),
+    row.like_count > 0
+      ? h("span", { class: "m-stats-like" }, `❤ ${row.like_count}`)
+      : null,
+  ]);
+}
+
+function renderMobileOpsCell(row: Player) {
+  if (!adminMode) {
+    return h(
+      "button",
+      {
+        class: "row-action-btn primary",
+        onClick: () => openPlayerDetail(row),
+      },
+      "详情",
+    );
+  }
+  const options = [
+    { label: "查看详情", key: "detail" },
+    { label: "改名", key: "rename" },
+    { label: "改积分", key: "score" },
+    {
+      label: row.is_online ? "标记离线" : "标记在线",
+      key: "toggleOnline",
+    },
+    row.is_active
+      ? { label: "移出本赛季", key: "remove" }
+      : { label: "恢复参赛", key: "restore" },
+  ];
+  return h(
+    NDropdown,
+    {
+      options,
+      trigger: "click",
+      onSelect: (key: string) => {
+        if (key === "detail") openPlayerDetail(row);
+        else if (key === "rename") openRenameModal(row);
+        else if (key === "score") openScoreModal(row);
+        else if (key === "toggleOnline") void onToggleOnline(row, !row.is_online);
+        else if (key === "remove") confirmDeletePlayer(row);
+        else if (key === "restore") void restorePlayer(row);
+      },
+    },
+    {
+      default: () =>
+        h(
+          "button",
+          { class: "row-action-btn primary mobile-ops-trigger" },
+          "⋯",
+        ),
+    },
+  );
+}
+
+const mobileColumns: DataTableColumns<Player> = [
+  ...(adminMode ? [{ type: "selection" as const }] : []),
+  {
+    title: "选手",
+    key: "name",
+    render: renderMobilePlayerCell,
+  },
+  {
+    title: "积分/战绩",
+    key: "stats",
+    width: 96,
+    render: renderMobileStatsCell,
+  },
+  {
+    title: "操作",
+    key: "ops",
+    width: 64,
+    render: renderMobileOpsCell,
+  },
+];
+
+const columns = computed<DataTableColumns<Player>>(() =>
+  isMobile.value ? mobileColumns : desktopColumns,
+);
 
 function rowProps(row: Player) {
   if (!row.is_active) {
@@ -1029,6 +1193,83 @@ async function onCreateMatch() {
   font-size: 10px;
   color: #2c6dc1;
   font-weight: 600;
+}
+
+/* ── 移动端紧凑单元格（h() 渲染，需要非 scoped） ── */
+.m-player-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 0;
+  min-width: 0;
+}
+.m-player-name-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.m-player-name-row .player-name-link {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.m-online-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.m-online-dot.online {
+  background: #3a9d57;
+}
+.m-online-dot.offline {
+  background: #c5ccd6;
+}
+.m-today-line {
+  font-size: 11px;
+  color: #7a8390;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.m-stats-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 2px 0;
+  font-family: '"SF Mono", "Courier New", monospace';
+}
+.m-stats-score {
+  font-size: 16px;
+  font-weight: 700;
+  color: #2c6dc1;
+  line-height: 1.1;
+}
+.m-stats-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #4d5663;
+}
+.m-stats-pct {
+  font-weight: 600;
+}
+.m-stats-like {
+  font-size: 11px;
+  color: #c1554a;
+  font-weight: 600;
+}
+
+.mobile-ops-trigger {
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 10px;
 }
 
 </style>

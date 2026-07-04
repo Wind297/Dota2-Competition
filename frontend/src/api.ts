@@ -127,6 +127,7 @@ export type RankingRow = {
   name: string;
   current_score: number;
   prev_season_rank: number | null;
+  top_tags: TopTagItem[];
 };
 
 function authHeaders(): HeadersInit {
