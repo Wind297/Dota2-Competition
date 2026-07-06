@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import AuthToken
-from app.models import Match, Player, Season, SeasonPlayer, SeasonStatus
+from app.models import Match, MatchPlayer, Player, ScoreAuditLog, Season, SeasonPlayer, SeasonStatus
 from app.schemas import SeasonCreate, SeasonOut, SeasonRollover, FinalRankBatchBody
 from app.seasons import get_active_season_or_none
 
@@ -225,3 +225,39 @@ def get_final_ranks(season_id: int, _: AuthToken, db: Session = Depends(get_db))
         {"player_id": int(pid), "rank": int(r), "name": name}
         for pid, r, name in rows
     ]
+
+
+@router.post("/{season_id}/recalculate-scores")
+def recalculate_season_scores(season_id: int, _: AuthToken, db: Session = Depends(get_db)):
+    """把指定赛季所有 season_players.current_score 重置为 SUM(match_players.score_delta)。
+    仅用于「按比赛记录重新计算积分」一次性运维操作。重置后管理员需手动 PATCH 补回
+    之前的手动调整（每补一条会留一条 manual_adjust 审计记录）。
+    本操作不写审计日志（它是「按比赛重算」的元操作，不是加减分事件）。"""
+    s = db.get(Season, season_id)
+    if s is None:
+        raise HTTPException(status_code=404, detail="赛季不存在")
+
+    # 计算 (player_id -> sum_delta)
+    rows = db.execute(
+        select(
+            MatchPlayer.player_id,
+            func.coalesce(func.sum(MatchPlayer.score_delta), 0).label("total"),
+        )
+        .join(Match)
+        .where(Match.season_id == season_id)
+        .group_by(MatchPlayer.player_id)
+    ).all()
+    delta_map = {int(pid): int(total) for pid, total in rows}
+
+    # 重置所有该赛季 season_players
+    sps = db.scalars(
+        select(SeasonPlayer).where(SeasonPlayer.season_id == season_id)
+    ).all()
+    updated = 0
+    for sp in sps:
+        new_score = delta_map.get(sp.player_id, 0)
+        if sp.current_score != new_score:
+            sp.current_score = new_score
+            updated += 1
+    db.commit()
+    return {"ok": True, "updated": updated}

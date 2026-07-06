@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import AuthToken
 from app.matchday import get_matchday_start
+from app.audit import write_score_audit
+from app.datetime_norm import assume_shanghai_if_naive, assume_utc_if_naive
 from app.models import (
-    Match, MatchPlayer, Player, PlayerLike, PlayerTag, SeasonPlayer, Tag,
+    Match, MatchPlayer, Player, PlayerLike, PlayerTag, ScoreAuditLog, SeasonPlayer, Tag,
 )
 from app.schemas import (
     PlayerBulkImportBody,
@@ -20,6 +22,7 @@ from app.schemas import (
     PlayerPatch,
     PlayerOut,
     PlayerStats,
+    ScoreAuditEntry,
     TagVoteOut,
     TagVoteRow,
     TopTagItem,
@@ -93,8 +96,15 @@ def create_player(body: PlayerCreate, _: AuthToken, db: Session = Depends(get_db
     if existing:
         sp = get_or_create_season_player(db, season.id, existing.id)
         sp.is_active = True
+        old_score = sp.current_score
         sp.current_score = body.current_score
         sp.is_online = True
+        write_score_audit(
+            db, season_id=season.id, player_id=existing.id,
+            delta=body.current_score - old_score,
+            reason="initial_score",
+            note=f"重新激活并设积分 {old_score} → {body.current_score}",
+        )
         db.commit()
         return _player_to_out(existing, sp, 0, 0)
 
@@ -113,6 +123,12 @@ def create_player(body: PlayerCreate, _: AuthToken, db: Session = Depends(get_db
         is_active=True,
     )
     db.add(sp)
+    write_score_audit(
+        db, season_id=season.id, player_id=p.id,
+        delta=body.current_score,
+        reason="initial_score",
+        note=f"新建选手初始积分 {body.current_score}",
+    )
     db.commit()
     db.refresh(p)
     return _player_to_out(p, sp, 0, 0)
@@ -242,8 +258,15 @@ def bulk_import_players(body: PlayerBulkImportBody, _: AuthToken, db: Session = 
         existing = db.scalars(select(Player).where(Player.name == name)).first()
         if existing:
             sp = get_or_create_season_player(db, season.id, existing.id)
+            old_score = sp.current_score
             sp.current_score = row.current_score
             sp.is_active = True
+            write_score_audit(
+                db, season_id=season.id, player_id=existing.id,
+                delta=row.current_score - old_score,
+                reason="bulk_import",
+                note=f"批量导入覆盖 {old_score} → {row.current_score}",
+            )
             updated += 1
         else:
             p = Player(name=name)
@@ -256,6 +279,12 @@ def bulk_import_players(body: PlayerBulkImportBody, _: AuthToken, db: Session = 
                 is_online=True,
                 is_active=True,
             ))
+            write_score_audit(
+                db, season_id=season.id, player_id=p.id,
+                delta=row.current_score,
+                reason="bulk_import",
+                note=f"批量导入新建 {row.current_score}",
+            )
             created += 1
     try:
         db.commit()
@@ -308,7 +337,14 @@ def patch_player(
     if body.is_online is not None:
         sp.is_online = body.is_online
     if body.current_score is not None:
+        old_score = sp.current_score
         sp.current_score = body.current_score
+        write_score_audit(
+            db, season_id=season.id, player_id=p.id,
+            delta=body.current_score - old_score,
+            reason="manual_adjust",
+            note=f"管理员手动调整 {old_score} → {body.current_score}",
+        )
     if body.is_active is not None:
         sp.is_active = body.is_active
 
@@ -332,6 +368,105 @@ def patch_player(
         like_count=like_map.get(p.id, 0),
         top_tags=top_tags_map.get(p.id, []),
     )
+
+
+# ─────────────────────────────────────────────────────────────────
+# 互动：点赞 / 打标签
+# 使用游客匿名 voter_token（前端 localStorage UUID）实现一人一票。
+# 当前赛季是归档赛季时拒绝写入。
+# ─────────────────────────────────────────────────────────────────
+
+
+@router.get("/{player_id}", response_model=PlayerOut)
+def get_player(player_id: int, _: AuthToken, db: Session = Depends(get_db)):
+    """按 id 拉单个选手的当前赛季信息。供前端在排行榜入口点开选手详情时使用。"""
+    season = get_active_season(db)
+    p = db.get(Player, player_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="选手不存在")
+    sp = db.scalars(
+        select(SeasonPlayer).where(
+            SeasonPlayer.season_id == season.id,
+            SeasonPlayer.player_id == player_id,
+        )
+    ).first()
+    if sp is None:
+        # 选手不在当前赛季：返回零值 PlayerOut（仍带姓名/在线状态等基础信息）
+        return _player_to_out(
+            p,
+            SeasonPlayer(
+                season_id=season.id, player_id=p.id,
+                current_score=0, is_online=True, is_active=False,
+            ),
+            0, 0,
+        )
+    md = get_matchday_start()
+    today_stats = load_matchday_stats(db, md, season_id=season.id)
+    total_stats = _load_player_total_stats(db, season.id)
+    like_map = _load_like_counts(db, season.id)
+    top_tags_map = load_top_tags_for_season(db, season.id, top_n=5)
+    played, won = today_stats.get(p.id, (0, 0))
+    tp, tw = total_stats.get(p.id, (0, 0))
+    return _player_to_out(
+        p, sp, played, won,
+        total_played=tp, total_won=tw,
+        like_count=like_map.get(p.id, 0),
+        top_tags=top_tags_map.get(p.id, []),
+    )
+
+
+@router.get("/{player_id}/score-history", response_model=list[ScoreAuditEntry])
+def get_player_score_history(
+    player_id: int,
+    _: AuthToken,
+    db: Session = Depends(get_db),
+    season_id: int | None = Query(None, description="按赛季过滤，缺省=当前赛季"),
+):
+    """返回该选手在指定赛季（缺省=当前）的所有积分变更记录，按时间升序。
+    每条带 match_summary（如果是比赛产生的），前端无需再请求 match detail。"""
+    p = db.get(Player, player_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="选手不存在")
+    if season_id is None:
+        season = get_active_season(db)
+        sid = season.id
+    else:
+        sid = season_id
+
+    logs = db.scalars(
+        select(ScoreAuditLog)
+        .where(
+            ScoreAuditLog.season_id == sid,
+            ScoreAuditLog.player_id == player_id,
+        )
+        .order_by(ScoreAuditLog.created_at.asc(), ScoreAuditLog.id.asc())
+    ).all()
+
+    # 批量拉相关比赛信息以拼装 match_summary
+    match_ids = {log.match_id for log in logs if log.match_id is not None}
+    match_map: dict[int, Match] = {}
+    if match_ids:
+        match_map = {
+            m.id: m for m in db.scalars(select(Match).where(Match.id.in_(match_ids))).all()
+        }
+
+    out: list[ScoreAuditEntry] = []
+    for log in logs:
+        match_summary = None
+        m = match_map.get(log.match_id) if log.match_id is not None else None
+        if m is not None:
+            md_str = assume_shanghai_if_naive(m.matchday_start).strftime("%Y-%m-%d")
+            match_summary = f"#{m.id} · {md_str} 比赛日"
+        out.append(ScoreAuditEntry(
+            id=log.id,
+            delta=log.delta,
+            reason=log.reason,
+            note=log.note,
+            match_id=log.match_id,
+            match_summary=match_summary,
+            created_at=assume_utc_if_naive(log.created_at),
+        ))
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────

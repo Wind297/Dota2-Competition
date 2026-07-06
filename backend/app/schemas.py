@@ -252,3 +252,15 @@ class TagVoteRow(BaseModel):
 
 
 TagVoteOut.model_rebuild()
+
+
+# ── 积分变更追溯 ───────────────────────────────────────────────────
+class ScoreAuditEntry(BaseModel):
+    """单条积分变更记录。match_summary 由后端拼装好供前端直接展示。"""
+    id: int
+    delta: int
+    reason: str
+    note: str | None = None
+    match_id: int | None = None
+    match_summary: str | None = None
+    created_at: datetime

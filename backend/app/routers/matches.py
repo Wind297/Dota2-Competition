@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config_helpers import get_deduct_threshold
+from app.audit import write_score_audit
 from app.database import get_db
 from app.datetime_norm import assume_shanghai_if_naive, assume_utc_if_naive
 from app.deps import AuthToken
@@ -31,19 +32,30 @@ router = APIRouter(prefix="/api/matches", tags=["matches"])
 
 
 def _set_match_player_delta(
-    db: Session, mp: MatchPlayer, season_id: int | None, target_delta: int, *, skip_score: bool = False,
+    db: Session, mp: MatchPlayer, season_id: int | None, target_delta: int,
+    *, skip_score: bool = False, reason: str = "match_result", note: str | None = None,
 ) -> None:
     """把某选手在本场比赛产生的积分影响调整为 target_delta。
-    skip_score=True（练习赛）时只更新 score_delta 字段，不改 SeasonPlayer.current_score。"""
+    skip_score=True（练习赛）时只更新 score_delta 字段，不改 SeasonPlayer.current_score，
+    也不写审计日志。"""
     diff = target_delta - mp.score_delta
     if diff != 0 and season_id is not None and not skip_score:
         sp = get_or_create_season_player(db, season_id, mp.player_id)
         sp.current_score = sp.current_score + diff
+        write_score_audit(
+            db, season_id=season_id, player_id=mp.player_id, delta=diff,
+            reason=reason, match_id=mp.match_id, note=note,
+        )
     mp.score_delta = target_delta
 
 
-def _clear_match_player_delta(db: Session, mp: MatchPlayer, season_id: int | None, *, skip_score: bool = False) -> None:
-    _set_match_player_delta(db, mp, season_id, 0, skip_score=skip_score)
+def _clear_match_player_delta(
+    db: Session, mp: MatchPlayer, season_id: int | None,
+    *, skip_score: bool = False, reason: str = "match_result", note: str | None = None,
+) -> None:
+    _set_match_player_delta(
+        db, mp, season_id, 0, skip_score=skip_score, reason=reason, note=note,
+    )
 
 
 def _ensure_active_season_match(m: Match, db: Session) -> None:
@@ -264,7 +276,10 @@ def patch_match(match_id: int, body: MatchPatch, _: AuthToken, db: Session = Dep
         # 移除：撤销积分影响后删除
         for pid in old_ids - new_id_set:
             mp = old_id_to_row[pid]
-            _clear_match_player_delta(db, mp, m.season_id, skip_score=m.is_practice)
+            _clear_match_player_delta(
+                db, mp, m.season_id,
+                skip_score=m.is_practice, reason="match_edit", note="比赛编辑移除选手",
+            )
             db.delete(mp)
 
         # 名单变更冲突检查
@@ -329,13 +344,25 @@ def _apply_result(
             target = 2 if is_winner else -2
             mp.is_winner = is_winner
             mp.is_deducted = False
+            note = "老板队友 +2" if is_winner else "老板队友 -2"
         else:
             # 默认规则（无老板 / 老板本人 / 老板对手）
             is_deducted = mp.player_id in deduct_set
             target = (1 if is_winner else 0) + (-1 if is_deducted else 0)
             mp.is_winner = is_winner
             mp.is_deducted = is_deducted
-        _set_match_player_delta(db, mp, season_id, target, skip_score=skip_score)
+            if is_winner and is_deducted:
+                note = "胜者 +1（同时扣分 -1，净 0）"
+            elif is_winner:
+                note = "胜者 +1"
+            elif is_deducted:
+                note = "扣分 -1"
+            else:
+                note = "负方 0"
+        _set_match_player_delta(
+            db, mp, season_id, target,
+            skip_score=skip_score, reason="match_result", note=note,
+        )
 
 
 @router.patch("/{match_id}/result", response_model=MatchOut)
@@ -435,7 +462,10 @@ def delete_match(match_id: int, _: AuthToken, db: Session = Depends(get_db)):
 
     # 删除前撤销积分影响
     for mp in m.players:
-        _clear_match_player_delta(db, mp, m.season_id, skip_score=m.is_practice)
+        _clear_match_player_delta(
+            db, mp, m.season_id,
+            skip_score=m.is_practice, reason="match_delete", note="比赛删除回退",
+        )
 
     db.delete(m)
     db.commit()

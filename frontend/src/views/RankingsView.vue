@@ -6,6 +6,7 @@ import type { RankingRow, Season } from "@/api";
 import { fetchRankings, fetchSeasons } from "@/api";
 import MainLayout from "@/components/MainLayout.vue";
 import PageHeader from "@/components/PageHeader.vue";
+import PlayerDetailModal from "@/components/PlayerDetailModal.vue";
 import { useIsMobile } from "@/composables/useIsMobile";
 
 const route = useRoute();
@@ -18,7 +19,16 @@ const seasons = ref<Season[]>([]);
 const selectedSeasonId = ref<number | null>(null);
 const isMobile = useIsMobile();
 
-const seasonOptions = computed(() => {
+// 选手详情 Modal（点击选手名打开）
+const detailShow = ref(false);
+const detailPlayerId = ref<number | null>(null);
+
+function openPlayerDetail(playerId: number) {
+  detailPlayerId.value = playerId;
+  detailShow.value = true;
+}
+
+const seasonOptions = computed<any[]>(() => {
   const opts: { label: string; value: number | null }[] = [
     { label: "当前赛季", value: null },
   ];
@@ -124,17 +134,19 @@ function renderPlayerCell(row: RankingRow, compact: boolean) {
   const nameRow = h(
     "span",
     {
+      class: "rk-player-link",
+      onClick: () => openPlayerDetail(row.player_id),
       style: {
         display: "inline-flex",
         alignItems: "center",
         gap: "5px",
-        color: "#1a2435",
         fontWeight: isTop3 ? "600" : "400",
         fontSize: compact ? "14px" : "13px",
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
         maxWidth: "100%",
+        cursor: "pointer",
       },
     },
     [
@@ -238,6 +250,13 @@ const columns = computed<DataTableColumns<RankingRow>>(() =>
         :row-key="(r: RankingRow) => r.player_id"
       />
     </n-card>
+
+    <!-- 选手详情 Modal（点击选手名打开，含积分明细） -->
+    <player-detail-modal
+      v-model:show="detailShow"
+      :player-id="detailPlayerId"
+      @changed="load"
+    />
   </main-layout>
 </template>
 
@@ -266,6 +285,13 @@ const columns = computed<DataTableColumns<RankingRow>>(() =>
   gap: 4px;
   padding: 2px 0;
   min-width: 0;
+}
+.rk-player-link {
+  color: #1a2435;
+  transition: color 0.15s;
+}
+.rk-player-link:hover {
+  color: #2c6dc1;
 }
 .mini-tag-row {
   display: flex;

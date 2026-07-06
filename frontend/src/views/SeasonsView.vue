@@ -15,7 +15,7 @@ import {
   useMessage,
   type DataTableColumns,
 } from "naive-ui";
-import type { Season, FinalRankEntry, Player } from "@/api";
+import type { Season, FinalRankEntry } from "@/api";
 import {
   createSeason,
   endSeason,
@@ -23,6 +23,7 @@ import {
   fetchSeasons,
   getFinalRanks,
   isAdmin,
+  recalculateSeasonScores,
   rolloverSeason,
   setFinalRanks,
 } from "@/api";
@@ -135,6 +136,27 @@ function promptOpenNextSeason() {
     negativeText: "稍后",
     onPositiveClick: () => {
       openNewSeasonModal();
+    },
+  });
+}
+
+function confirmRecalculateScores(s: Season) {
+  dialog.warning({
+    title: `按比赛记录重置「${s.name}」积分？`,
+    content:
+      "将把本赛季所有选手的当前积分重置为「比赛累计 score_delta 之和」。之前管理员手动加减的分数会被抹掉，重置后请用「修改选手」功能逐条补回（每补一条会留一条管理员调整记录）。此操作不可撤销。",
+    positiveText: "确认重置",
+    negativeText: "取消",
+    onPositiveClick: async () => {
+      try {
+        const res = await recalculateSeasonScores(s.id);
+        message.success(`已重置，更新 ${res.updated} 名选手。请手动补回之前的手动调整。`);
+        await load();
+        return true;
+      } catch (e) {
+        message.error((e as Error).message);
+        return false;
+      }
     },
   });
 }
@@ -297,7 +319,7 @@ const columns: DataTableColumns<Season> = [
   {
     title: "操作",
     key: "actions",
-    width: 300,
+    width: 400,
     render(row) {
       const buttons: ReturnType<typeof h>[] = [
         h(
@@ -322,6 +344,16 @@ const columns: DataTableColumns<Season> = [
         );
       }
       if (adminMode && row.is_current) {
+        buttons.push(
+          h(
+            "button",
+            {
+              class: "row-action-btn danger",
+              onClick: () => confirmRecalculateScores(row),
+            },
+            "按比赛重置积分",
+          ),
+        );
         buttons.push(
           h(
             "button",

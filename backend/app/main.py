@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import Base, engine
 from app.models import (  # noqa: F401
-    Match, MatchPlayer, Player, PlayerLike, PlayerTag, Season, SeasonPlayer, SystemKV, Tag,
+    Match, MatchPlayer, Player, PlayerLike, PlayerTag, ScoreAuditLog, Season, SeasonPlayer, SystemKV, Tag,
 )
 from app.routers import auth, config, matches, players, presets, rankings, seasons, tags
 
@@ -173,6 +173,58 @@ def on_startup():
                 )
         except Exception:
             pass
+
+        # ── score_audit_log 历史回填（仅当表为空时执行一次）─────
+        # 从 match_players 回填 match_result 审计记录，让历史比赛的加减分可追溯。
+        # 不补 opening_balance，不改 current_score —— 用户事后通过「按比赛记录重置积分」
+        # 按钮把 current_score 归位到 SUM(比赛 delta)，再手动 PATCH回之前的手动调整。
+        try:
+            audit_count = conn.exec_driver_sql(
+                "SELECT COUNT(*) FROM score_audit_log"
+            ).fetchone()[0]
+        except Exception:
+            audit_count = 0
+
+        if audit_count == 0:
+            try:
+                rows = conn.exec_driver_sql(
+                    """
+                    SELECT mp.player_id, mp.match_id, mp.score_delta, m.season_id, m.created_at
+                    FROM match_players mp
+                    JOIN matches m ON m.id = mp.match_id
+                    WHERE mp.score_delta != 0 AND m.season_id IS NOT NULL
+                    ORDER BY m.created_at ASC, mp.id ASC
+                    """
+                ).fetchall()
+            except Exception:
+                rows = []
+
+            for pid, mid, delta, sid, cat in rows:
+                if delta == 2:
+                    note = "老板队友 +2"
+                elif delta == -2:
+                    note = "老板队友 -2"
+                elif delta == 1:
+                    note = "胜者 +1"
+                elif delta == -1:
+                    note = "扣分 -1"
+                else:
+                    note = f"比赛调整 {int(delta):+d}"
+                # cat 是 datetime 对象，转成字符串供原生 SQL 使用
+                cat_str = (
+                    cat.strftime("%Y-%m-%d %H:%M:%S.%f")
+                    if hasattr(cat, "strftime")
+                    else str(cat)
+                )
+                try:
+                    conn.exec_driver_sql(
+                        "INSERT INTO score_audit_log "
+                        "(season_id, player_id, delta, reason, match_id, note, created_at) "
+                        "VALUES (?, ?, ?, 'match_result', ?, ?, ?)",
+                        (int(sid), int(pid), int(delta), int(mid), note, cat_str),
+                    )
+                except Exception:
+                    pass
 
 
 @app.get("/api/health")

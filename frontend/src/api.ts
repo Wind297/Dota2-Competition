@@ -243,6 +243,38 @@ export async function deletePlayer(id: number): Promise<void> {
   }
 }
 
+// ── 选手详情 / 积分变更追溯 ─────────────────────────────────────
+export type ScoreAuditEntry = {
+  id: number;
+  delta: number;
+  reason: string;
+  note: string | null;
+  match_id: number | null;
+  match_summary: string | null;
+  created_at: string;
+};
+
+/** 按 id 拉单个选手的当前赛季信息（供排行榜点开选手详情用） */
+export async function fetchPlayerById(id: number): Promise<Player> {
+  const res = await apiFetch(`/api/players/${id}`);
+  if (!res.ok) throw new Error("加载选手失败");
+  return res.json();
+}
+
+/** 拉某选手在某赛季（缺省=当前）的积分变更记录，按时间升序 */
+export async function fetchPlayerScoreHistory(
+  playerId: number,
+  seasonId?: number,
+): Promise<ScoreAuditEntry[]> {
+  const url =
+    seasonId != null
+      ? `/api/players/${playerId}/score-history?season_id=${seasonId}`
+      : `/api/players/${playerId}/score-history`;
+  const res = await apiFetch(url);
+  if (!res.ok) throw new Error("加载积分明细失败");
+  return res.json();
+}
+
 export async function fetchPresets(): Promise<Preset[]> {
   const res = await apiFetch("/api/presets");
   if (!res.ok) throw new Error("加载快捷方案失败");
@@ -439,6 +471,20 @@ export async function setFinalRanks(seasonId: number, entries: FinalRankEntry[])
 export async function getFinalRanks(seasonId: number): Promise<FinalRankEntry[]> {
   const res = await apiFetch(`/api/seasons/${seasonId}/ranks`);
   if (!res.ok) throw new Error("加载名次失败");
+  return res.json();
+}
+
+/** 按比赛记录重置指定赛季所有选手的 current_score = SUM(match_players.score_delta) */
+export async function recalculateSeasonScores(
+  seasonId: number,
+): Promise<{ ok: boolean; updated: number }> {
+  const res = await apiFetch(`/api/seasons/${seasonId}/recalculate-scores`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || "重置积分失败");
+  }
   return res.json();
 }
 

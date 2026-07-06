@@ -186,3 +186,28 @@ class SystemKV(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(String(256))
+
+
+class ScoreAuditLog(Base):
+    """选手积分变更日志。每条 = 一次加减分事件。
+    reason 取值: match_result / match_edit / match_delete / manual_adjust /
+    bulk_import / initial_score。
+    match_id 非 None 表示由比赛产生；其余场景 match_id 为 None。"""
+    __tablename__ = "score_audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    season_id: Mapped[int] = mapped_column(
+        ForeignKey("seasons.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    delta: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    match_id: Mapped[int | None] = mapped_column(
+        ForeignKey("matches.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    note: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
