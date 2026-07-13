@@ -97,6 +97,10 @@ class Match(Base):
     actual_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sequence_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_practice: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_banming: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False,
+        doc="板命局：赢方 +2 输方 -2，跳过老板规则和扣分阈值",
+    )
     status: Mapped[MatchStatus] = mapped_column(
         Enum(MatchStatus, native_enum=False),
         default=MatchStatus.confirmed,

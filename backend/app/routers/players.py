@@ -456,7 +456,8 @@ def get_player_score_history(
         m = match_map.get(log.match_id) if log.match_id is not None else None
         if m is not None:
             md_str = assume_shanghai_if_naive(m.matchday_start).strftime("%Y-%m-%d")
-            match_summary = f"#{m.id} · {md_str} 比赛日"
+            prefix = "【板命】" if m.is_banming else ""
+            match_summary = f"{prefix}#{m.id} · {md_str} 比赛日"
         out.append(ScoreAuditEntry(
             id=log.id,
             delta=log.delta,

@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import AuthToken
-from app.models import Player, Season, SeasonPlayer, SeasonStatus
+from app.models import Match, MatchPlayer, MatchStatus, Player, Season, SeasonPlayer, SeasonStatus
 from app.schemas import RankingRow
 from app.seasons import get_active_season
 from app.stats import load_top_tags_for_season
@@ -44,6 +44,23 @@ def rankings(
 
     top_tags_map = load_top_tags_for_season(db, season_id, top_n=3)
 
+    # 板命赢家计数：板命局 + 已完赛 + 该选手是胜者
+    banming_wins_rows = db.execute(
+        select(
+            MatchPlayer.player_id,
+            func.count(MatchPlayer.id).label("wins"),
+        )
+        .join(Match)
+        .where(
+            Match.season_id == season_id,
+            Match.is_banming.is_(True),
+            Match.status == MatchStatus.completed,
+            MatchPlayer.is_winner.is_(True),
+        )
+        .group_by(MatchPlayer.player_id)
+    ).all()
+    banming_wins_map = {int(pid): int(w) for pid, w in banming_wins_rows}
+
     rows = db.execute(
         select(SeasonPlayer, Player)
         .join(Player, Player.id == SeasonPlayer.player_id)
@@ -64,6 +81,7 @@ def rankings(
                 current_score=sp.current_score,
                 prev_season_rank=prev_rank_map.get(p.id),
                 top_tags=top_tags_map.get(p.id, []),
+                banming_wins=banming_wins_map.get(p.id, 0),
             )
         )
     return out

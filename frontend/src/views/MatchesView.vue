@@ -123,11 +123,35 @@ const desktopColumns: DataTableColumns<MatchRecord> = [
     title: "比赛名称",
     key: "title",
     render(row) {
-      return h(
-        "span",
-        { style: { color: "#1a2435", fontSize: "13px", fontWeight: "500" } },
-        formatMatchTitle(row),
+      const children: ReturnType<typeof h>[] = [];
+      if (row.is_banming) {
+        children.push(
+          h(
+            "span",
+            {
+              style: {
+                display: "inline-block",
+                marginRight: "6px",
+                padding: "1px 6px",
+                fontSize: "11px",
+                fontWeight: "600",
+                borderRadius: "3px",
+                background: "rgba(208, 48, 80, 0.12)",
+                color: "#d03050",
+              },
+            },
+            "【板命】",
+          ),
+        );
+      }
+      children.push(
+        h(
+          "span",
+          { style: { color: "#1a2435", fontSize: "13px", fontWeight: "500" } },
+          formatMatchTitle(row),
+        ),
       );
+      return h("span", { style: { display: "inline-flex", alignItems: "center", flexWrap: "wrap" } }, children);
     },
   },
   {
@@ -181,7 +205,7 @@ const mobileColumns: DataTableColumns<MatchRecord> = [
     key: "main",
     render(row) {
       const isCompleted = row.status === "completed";
-      const idStatusRow = h("div", { class: "m-match-id-status" }, [
+      const idStatusChildren: ReturnType<typeof h>[] = [
         h(
           "span",
           { class: "m-match-id" },
@@ -198,7 +222,26 @@ const mobileColumns: DataTableColumns<MatchRecord> = [
           },
           isCompleted ? "已完赛" : "已确认",
         ),
-      ]);
+      ];
+      if (row.is_banming) {
+        idStatusChildren.push(
+          h(
+            "span",
+            {
+              style: {
+                padding: "1px 6px",
+                fontSize: "11px",
+                fontWeight: "600",
+                borderRadius: "3px",
+                background: "rgba(208, 48, 80, 0.12)",
+                color: "#d03050",
+              },
+            },
+            "板命局",
+          ),
+        );
+      }
+      const idStatusRow = h("div", { class: "m-match-id-status" }, idStatusChildren);
       const titleRow = h(
         "div",
         { class: "m-match-title" },

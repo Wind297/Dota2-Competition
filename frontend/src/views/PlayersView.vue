@@ -714,6 +714,7 @@ async function onAddPlayer() {
 
 const creating = ref(false);
 const isPractice = ref(false);
+const isBanming = ref(false);
 
 // ── 扣分阈值（全局可调，存后端 SystemKV，影响未来比赛）──────────
 const thresholdDraft = ref(deductThreshold.value);
@@ -745,9 +746,12 @@ async function onCreateMatch() {
   creating.value = true;
   try {
     const ids = checkedRowKeys.value.map((k) => Number(k));
-    const m = await createMatch(ids, isPractice.value);
+    const m = await createMatch(ids, isPractice.value, isBanming.value);
+    const tag = isBanming.value ? "板命局" : isPractice.value ? "练习赛" : "比赛";
     checkedRowKeys.value = [];
-    message.success(isPractice.value ? "练习赛已创建" : "比赛已创建");
+    isPractice.value = false;
+    isBanming.value = false;
+    message.success(`${tag}已创建`);
     await router.push({ name: "match-detail", params: { id: String(m.id) } });
   } catch (e) {
     message.error((e as Error).message);
@@ -865,6 +869,9 @@ async function onCreateMatch() {
       </div>
       <n-checkbox v-model:checked="isPractice" style="flex-shrink: 0">
         <span style="font-size: 12px">练习赛（不计积分）</span>
+      </n-checkbox>
+      <n-checkbox v-model:checked="isBanming" style="flex-shrink: 0">
+        <span style="font-size: 12px; color: #d03050">板命局（赢方+2 / 输方-2）</span>
       </n-checkbox>
       <n-button type="primary" :disabled="!canCreate" :loading="creating" @click="onCreateMatch">
         创建比赛

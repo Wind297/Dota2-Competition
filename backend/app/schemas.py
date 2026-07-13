@@ -97,6 +97,7 @@ class MatchOut(BaseModel):
     actual_time: datetime | None
     sequence_no: int | None = None
     is_practice: bool = False
+    is_banming: bool = False
     status: MatchStatus
     created_at: datetime
     players: list[MatchPlayerBrief] = Field(default_factory=list)
@@ -107,15 +108,17 @@ class MatchOut(BaseModel):
 class MatchCreate(BaseModel):
     player_ids: list[int] = Field(..., min_length=10, max_length=10)
     is_practice: bool = False
+    is_banming: bool = False
 
 
 class MatchPatch(BaseModel):
-    """编辑已存在的比赛：可改比赛日、场次号、上场名单、练习赛标记。"""
+    """编辑已存在的比赛：可改比赛日、场次号、上场名单、练习赛标记、板命局标记。"""
     matchday_start: datetime | None = None
     sequence_no: int | None = Field(None, ge=1, le=999)
     player_ids: list[int] | None = Field(None, min_length=10, max_length=10)
     clear_sequence_no: bool = False
     is_practice: bool | None = None
+    is_banming: bool | None = None
 
     @model_validator(mode="after")
     def at_least_one_field(self):
@@ -125,6 +128,7 @@ class MatchPatch(BaseModel):
             and self.player_ids is None
             and not self.clear_sequence_no
             and self.is_practice is None
+            and self.is_banming is None
         ):
             raise ValueError("至少需要提供一个可修改字段")
         return self
@@ -151,6 +155,7 @@ class RankingRow(BaseModel):
     current_score: int
     prev_season_rank: int | None = None
     top_tags: list[TopTagItem] = Field(default_factory=list)
+    banming_wins: int = 0
 
 
 class PresetFilter(BaseModel):

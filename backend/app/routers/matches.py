@@ -101,6 +101,7 @@ def _match_to_out(m: Match, db: Session) -> MatchOut:
         actual_time=assume_utc_if_naive(m.actual_time),
         sequence_no=_compute_sequence_no(db, m),
         is_practice=m.is_practice,
+        is_banming=m.is_banming,
         status=m.status,
         created_at=assume_utc_if_naive(m.created_at),
         players=briefs,
@@ -198,7 +199,13 @@ def create_match(body: MatchCreate, _: AuthToken, db: Session = Depends(get_db))
             detail=f"以下选手在本比赛日已有未完成的已确认比赛：{sorted(set(busy))}",
         )
 
-    match = Match(season_id=season.id, matchday_start=md, status=MatchStatus.confirmed, is_practice=body.is_practice)
+    match = Match(
+        season_id=season.id,
+        matchday_start=md,
+        status=MatchStatus.confirmed,
+        is_practice=body.is_practice,
+        is_banming=body.is_banming,
+    )
     db.add(match)
     db.flush()
     id_set = {p.id for p in players}
@@ -236,6 +243,15 @@ def patch_match(match_id: int, body: MatchPatch, _: AuthToken, db: Session = Dep
 
     if body.is_practice is not None:
         m.is_practice = body.is_practice
+
+    if body.is_banming is not None:
+        # 已完赛比赛不允许切换板命局类型，避免账目混乱
+        if body.is_banming != m.is_banming and m.status == MatchStatus.completed:
+            raise HTTPException(
+                status_code=400,
+                detail="已完赛比赛不能切换板命局类型，请先删除比赛再重新创建",
+            )
+        m.is_banming = body.is_banming
 
     if body.clear_sequence_no:
         m.sequence_no = None
@@ -327,11 +343,28 @@ def _apply_result(
     *,
     skip_score: bool = False,
     boss_player_id: int | None = None,
+    is_banming: bool = False,
 ) -> None:
     """统一应用结果。差额同步到选手 current_score，幂等。
     skip_score=True（练习赛）时仅记录胜负标记，不改积分。
     boss_player_id 非 None 时，与老板同侧的其他 4 名队友按 ±2 记分（无条件，不受
-    deduct_set 影响、is_deducted 置 False）；老板本人与老板对手方仍走默认规则。"""
+    deduct_set 影响、is_deducted 置 False）；老板本人与老板对手方仍走默认规则。
+    is_banming=True 时优先级最高：所有上场选手按胜 +2 / 负 -2 记分，跳过老板规则
+    和扣分名单。"""
+    if is_banming:
+        # 板命局：所有人 ±2，跳过老板规则和扣分名单
+        for mp in rows:
+            is_winner = mp.player_id in win_set
+            target = 2 if is_winner else -2
+            mp.is_winner = is_winner
+            mp.is_deducted = False
+            note = "板命胜者 +2" if is_winner else "板命负方 -2"
+            _set_match_player_delta(
+                db, mp, season_id, target,
+                skip_score=skip_score, reason="match_result", note=note,
+            )
+        return
+
     boss_is_winner = boss_player_id in win_set if boss_player_id is not None else None
     for mp in rows:
         is_winner = mp.player_id in win_set
@@ -403,7 +436,11 @@ def submit_or_update_result(match_id: int, body: MatchResult, _: AuthToken, db: 
         raise HTTPException(status_code=400, detail="比赛状态无效")
 
     # ── 老板识别：名字含"老板"的选手，最多 1 名 ───────────────
-    boss_candidates = [mp for mp in rows if mp.player.name and "老板" in mp.player.name]
+    # 板命局跳过老板识别（板命规则优先级最高，全场 ±2）
+    if m.is_banming:
+        boss_candidates = []
+    else:
+        boss_candidates = [mp for mp in rows if mp.player.name and "老板" in mp.player.name]
     if len(boss_candidates) > 1:
         names = "、".join(mp.player.name for mp in boss_candidates)
         raise HTTPException(
@@ -413,8 +450,9 @@ def submit_or_update_result(match_id: int, body: MatchResult, _: AuthToken, db: 
 
     # ── 扣分阈值校验（防前端绕过）──────────────────────────
     # 老板队友走强制 ±2 不进 deduct_set，故只需校验 deduct_set 中的默认规则选手。
+    # 板命局跳过扣分阈值校验（板命规则不依赖扣分名单）。
     threshold = get_deduct_threshold(db)
-    if deduct_set and m.season_id is not None:
+    if deduct_set and m.season_id is not None and not m.is_banming:
         for pid in deduct_set:
             mp = next(mp for mp in rows if mp.player_id == pid)
             sp = db.scalars(
@@ -435,6 +473,7 @@ def submit_or_update_result(match_id: int, body: MatchResult, _: AuthToken, db: 
     _apply_result(
         db, rows, m.season_id, win_set, deduct_set,
         skip_score=m.is_practice, boss_player_id=boss_player_id,
+        is_banming=m.is_banming,
     )
     m.status = MatchStatus.completed
 

@@ -79,6 +79,8 @@ def on_startup():
                 )
             except Exception:
                 pass
+        if not _has_column(conn, "matches", "is_banming"):
+            _safe_alter(conn, "ALTER TABLE matches ADD COLUMN is_banming BOOLEAN NOT NULL DEFAULT 0")
 
         # ── 赛季初始化 ────────────────────────────────────────
         # 检查是否已有任何赛季；若无，则创建「第 1 赛季」并把现有数据划归该赛季
@@ -189,7 +191,7 @@ def on_startup():
             try:
                 rows = conn.exec_driver_sql(
                     """
-                    SELECT mp.player_id, mp.match_id, mp.score_delta, m.season_id, m.created_at
+                    SELECT mp.player_id, mp.match_id, mp.score_delta, m.season_id, m.created_at, m.is_banming
                     FROM match_players mp
                     JOIN matches m ON m.id = mp.match_id
                     WHERE mp.score_delta != 0 AND m.season_id IS NOT NULL
@@ -199,8 +201,10 @@ def on_startup():
             except Exception:
                 rows = []
 
-            for pid, mid, delta, sid, cat in rows:
-                if delta == 2:
+            for pid, mid, delta, sid, cat, is_banming in rows:
+                if is_banming:
+                    note = "板命胜者 +2" if delta > 0 else "板命负方 -2"
+                elif delta == 2:
                     note = "老板队友 +2"
                 elif delta == -2:
                     note = "老板队友 -2"

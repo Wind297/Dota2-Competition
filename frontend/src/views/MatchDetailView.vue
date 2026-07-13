@@ -117,6 +117,8 @@ const deductModeForCorrection = ref(false);
  *  为了得到「不计本场的真实积分」，需要减去 score_delta。 */
 async function buildDeductCandidates(winnerIds: Set<number>): Promise<DeductCandidate[]> {
   if (!match.value) return [];
+  // 板命局：所有人 ±2，跳过扣分阈值和老板规则，不需要扣分候选
+  if (match.value.is_banming) return [];
   const allPlayers = await fetchPlayers({});
   const scoreMap = new Map<number, number>();
   for (const p of allPlayers) scoreMap.set(p.id, p.current_score);
@@ -267,6 +269,7 @@ const allPlayers = ref<Player[]>([]);
 const editMatchdayMs = ref<number | null>(null);
 const editSequenceNo = ref<number | null>(null);
 const editPlayerIds = ref<number[]>([]);
+const editIsBanming = ref(false);
 
 const playerOptions = computed(() =>
   allPlayers.value.map((p) => ({
@@ -295,6 +298,7 @@ async function openEditModal() {
   editMatchdayMs.value = md.getTime();
   editSequenceNo.value = match.value.sequence_no ?? null;
   editPlayerIds.value = match.value.players.map((p) => p.player_id);
+  editIsBanming.value = match.value.is_banming;
   editModalShow.value = true;
 }
 
@@ -315,6 +319,7 @@ async function saveEdit() {
       sequence_no?: number;
       clear_sequence_no?: boolean;
       player_ids?: number[];
+      is_banming?: boolean;
     } = {};
 
     if (editMatchdayMs.value != null) {
@@ -339,6 +344,15 @@ async function saveEdit() {
       oldIds.size !== newIds.size || [...newIds].some((id) => !oldIds.has(id));
     if (changed) {
       body.player_ids = editPlayerIds.value;
+    }
+
+    if (editIsBanming.value !== match.value.is_banming) {
+      // 已完赛比赛后端会拒绝切换，前端先做一次提示更友好
+      if (match.value.status === "completed") {
+        message.warning("已完赛比赛不能切换板命局类型，请先删除比赛再重新创建");
+        return;
+      }
+      body.is_banming = editIsBanming.value;
     }
 
     if (Object.keys(body).length === 0) {
@@ -401,6 +415,18 @@ function deltaColor(delta: number): string {
           <span class="meta-value">
             {{ match.sequence_no != null ? `第 ${match.sequence_no} 场（手工）` : "自动编号" }}
           </span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">玩法</span>
+          <span
+            v-if="match.is_banming"
+            class="banming-pill"
+          >板命局</span>
+          <span v-else class="meta-value">常规</span>
+        </div>
+        <div v-if="match.is_practice" class="meta-item">
+          <span class="meta-label">类型</span>
+          <span class="meta-value" style="color: #b97324">练习赛（不计积分）</span>
         </div>
       </div>
 
@@ -562,6 +588,19 @@ function deltaColor(delta: number): string {
             <div class="field-hint">移除已计分的选手会回退本场对其产生的所有积分</div>
           </div>
 
+          <div>
+            <div class="field-label">玩法类型</div>
+            <n-checkbox
+              v-model:checked="editIsBanming"
+              :disabled="match.status === 'completed'"
+            >
+              <span style="font-size: 13px; color: #d03050">板命局（赢方 +2 / 输方 -2，跳过老板规则与扣分阈值）</span>
+            </n-checkbox>
+            <div class="field-hint">
+              已完赛比赛不能切换板命局类型，避免账目混乱；如需调整请先删除比赛再重新创建
+            </div>
+          </div>
+
           <n-space justify="end">
             <n-button @click="editModalShow = false">取消</n-button>
             <n-button
@@ -623,6 +662,17 @@ function deltaColor(delta: number): string {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
+}
+
+/* 板命局徽章 */
+.banming-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 3px;
+  background: rgba(208, 48, 80, 0.12);
+  color: #d03050;
 }
 .status-completed {
   background: rgba(58, 157, 87, 0.12);

@@ -105,6 +105,7 @@ export type MatchRecord = {
   actual_time: string | null;
   sequence_no: number | null;
   is_practice: boolean;
+  is_banming: boolean;
   status: "confirmed" | "completed";
   created_at: string;
   players: MatchPlayerBrief[];
@@ -128,6 +129,7 @@ export type RankingRow = {
   current_score: number;
   prev_season_rank: number | null;
   top_tags: TopTagItem[];
+  banming_wins: number;
 };
 
 function authHeaders(): HeadersInit {
@@ -281,10 +283,14 @@ export async function fetchPresets(): Promise<Preset[]> {
   return res.json();
 }
 
-export async function createMatch(player_ids: number[], is_practice = false): Promise<MatchRecord> {
+export async function createMatch(
+  player_ids: number[],
+  is_practice = false,
+  is_banming = false,
+): Promise<MatchRecord> {
   const res = await apiFetch("/api/matches", {
     method: "POST",
-    body: JSON.stringify({ player_ids, is_practice }),
+    body: JSON.stringify({ player_ids, is_practice, is_banming }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -349,6 +355,8 @@ export async function patchMatch(
     sequence_no?: number;
     clear_sequence_no?: boolean;
     player_ids?: number[];
+    is_practice?: boolean;
+    is_banming?: boolean;
   },
 ): Promise<MatchRecord> {
   const res = await apiFetch(`/api/matches/${matchId}`, {

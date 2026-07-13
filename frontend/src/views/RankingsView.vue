@@ -201,6 +201,31 @@ const desktopColumns: DataTableColumns<RankingRow> = [
     width: 140,
     render: (row) => renderScoreCell(row, false),
   },
+  {
+    title: "板命赢",
+    key: "banming_wins",
+    width: 90,
+    render(row) {
+      if (!row.banming_wins) {
+        return h("span", { style: { color: "#c0c4cc", fontSize: "12px" } }, "—");
+      }
+      return h(
+        "span",
+        {
+          style: {
+            display: "inline-block",
+            padding: "2px 8px",
+            fontSize: "12px",
+            fontWeight: "600",
+            borderRadius: "3px",
+            background: "rgba(208, 48, 80, 0.12)",
+            color: "#d03050",
+          },
+        },
+        String(row.banming_wins),
+      );
+    },
+  },
 ];
 
 const mobileColumns: DataTableColumns<RankingRow> = [
@@ -220,6 +245,27 @@ const mobileColumns: DataTableColumns<RankingRow> = [
     key: "current_score",
     width: 70,
     render: (row) => renderScoreCell(row, true),
+  },
+  {
+    title: "板命",
+    key: "banming_wins",
+    width: 56,
+    render(row) {
+      if (!row.banming_wins) {
+        return h("span", { style: { color: "#c0c4cc", fontSize: "12px" } }, "—");
+      }
+      return h(
+        "span",
+        {
+          style: {
+            color: "#d03050",
+            fontSize: "13px",
+            fontWeight: "600",
+          },
+        },
+        String(row.banming_wins),
+      );
+    },
   },
 ];
 
