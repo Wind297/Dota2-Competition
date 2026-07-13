@@ -557,7 +557,7 @@ function deltaColor(delta: number): string {
           <div>
             <div class="field-label">比赛日（归属日期）</div>
             <n-date-picker v-model:value="editMatchdayMs" type="date" clearable style="width: 100%" />
-            <div class="field-hint">比赛日窗口固定为该日 09:00 至次日 08:59（上海时区）</div>
+            <div class="field-hint">比赛日窗口固定为该日 09:00 至次日 13:59（上海时区，14:00 为切换节点）</div>
           </div>
 
           <div>
